@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,37 +21,129 @@ interface CalculatorState {
   downPaymentType: "percentage" | "amount";
   loanTerm: string;
   interestRate: string;
-  
-  // Step 2: Income & Expenses
+  closingCostRate: string; // Nebenkostenansatz in %
+  mortgageRate: string; //hypothekarzinssatz
+  borrowerDob: string; //dd.mm.yyyy
+  yearsToRetirement: string;
+  gender: "male" | "female" | "diverse" | "";
+  gender: "";
+    // Step 2: Income & Expenses
   grossAnnualIncome: string;
   monthlyDebts: string;
   propertyTax: string;
   homeInsurance: string;
   pmiRate: string;
+
+
+
+  // Step 2: Objektangaben & Finanzierung
+  propertyType: string;    // Art
+  usage: string;           // Nutzung
+  investmentCost: string;  // Anlagekosten (CHF)
+  marketValue: string;     // Verkehrswert (CHF)
+  pensionWithdrawal: string; // Pensionskassenvorbezug (CHF)
+  pillarWithdrawal: string;  // LVP / 3a-Bezug (CHF)
+  cashEquity: string;        // Barmittel (CHF)
+  isMarketLinked: boolean;   // steuert, ob Verkehrswert an Anlagekosten gekoppelt bleibt
   
   // Step 3: Additional Details
-  firstTimeBuyer: boolean;
-  creditScore: string;
-  employmentType: string;
-  moveInDate: Date | undefined;
+  incomeEr: string;              // CHF, z.B. "150000"
+  incomeSie: string;             // CHF
+  otherLoans: string;            // CHF (Leasing / Konsum)
+  otherHousingCosts: string;     // CHF (eigene Wohnkosten)
 }
 
 const defaultState: CalculatorState = {
-  purchasePrice: "",
-  downPayment: "",
-  downPaymentType: "percentage",
-  loanTerm: "30",
-  interestRate: "",
-  grossAnnualIncome: "",
-  monthlyDebts: "",
-  propertyTax: "",
-  homeInsurance: "",
-  pmiRate: "",
-  firstTimeBuyer: false,
-  creditScore: "",
-  employmentType: "",
-  moveInDate: undefined,
+  closingCostRate: "",
+  mortgageRate: "",
+  borrowerDob: "01.01.1990",
+  yearsToRetirement: "",
+    propertyType: "",   // z.B. "Einfamilienhaus fremdvermietet"
+  usage: "",          // z.B. "Vermietet" oder "Zweitnutzung"
+  investmentCost: "", // z.B. "1000000"
+  marketValue: "",    // default: folgt investmentCost
+  pensionWithdrawal: "",
+  pillarWithdrawal: "",
+  cashEquity: "",
+  isMarketLinked: true,
+
+  incomeEr: "",
+  incomeSie: "",
+  otherLoans: "",
+  otherHousingCosts: "",
 };
+
+//Helper formatierungen
+const clampPercent = (n: number) => Math.min(100, Math.max(1, n || 0));
+
+// 01.01.1990 -> true/false
+const isValidDob = (val: string): boolean => {
+  const m = val.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return false;
+  const d = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const y = Number(m[3]);
+  const dt = new Date(y, mo, d);
+  // exakte Kalenderprüfung (z.B. 31.02 ungültig)
+  return (
+    dt.getFullYear() === y &&
+    dt.getMonth() === mo &&
+    dt.getDate() === d
+  );
+};
+
+// Rentenalter CH
+const getRetirementAge = (gender: "male" | "female" | "diverse" | "") =>
+  gender === "female" ? 64 : 65; // default: 65
+
+// Alter in Jahren zum Stichtag
+const calcAge = (dobStr: string, asOf = new Date()): number => {
+  if (!isValidDob(dobStr)) return NaN;
+  const [d, m, y] = dobStr.split(".").map(Number);
+  const dob = new Date(y, m - 1, d);
+  let age = asOf.getFullYear() - y;
+  const hasHadBirthdayThisYear =
+    asOf.getMonth() > dob.getMonth() ||
+    (asOf.getMonth() === dob.getMonth() && asOf.getDate() >= dob.getDate());
+  if (!hasHadBirthdayThisYear) age -= 1;
+  return age;
+};
+
+const yearsToRetirementFromDob = (
+  dobStr: string,
+  gender: "male" | "female" | "diverse" | ""
+): number => {
+  const age = calcAge(dobStr);
+  if (Number.isNaN(age) || age < 0) return NaN;
+  const target = getRetirementAge(gender);
+  return Math.max(0, target - age);
+};
+
+// erlaubt „01011990“ -> „01.01.1990“, sonst gibt Originalstring zurück
+const normalizeDob = (val: string): string => {
+  const digits = val.replace(/\D/g, "");
+  if (digits.length === 8) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
+  }
+  return val.trim();
+};
+
+//part 2 helper
+// Helper functions for calculations
+const forcedUsageFromType = (
+  typeLabel: string
+): "eigennutzung" | "vermietet" | undefined => {
+  const t = (typeLabel || "").toLowerCase();
+  if (t.includes("selbstgenutzt")) return "eigennutzung";
+  if (t.includes("fremdvermietet")) return "vermietet";
+  return undefined;
+};
+
+//helper for accepting only numbers
+const onlyDigits = (v: string) => v.replace(/\D+/g, "");
+const fmtCH = (digits: string) =>
+  digits ? new Intl.NumberFormat("de-CH").format(Number(digits)) : "";
+
 
 // Helper functions for calculations
 const formatCurrency = (value: number): string => {
@@ -71,6 +163,9 @@ const formatNumber = (value: string): string => {
 const parseNumber = (value: string): number => {
   return Number(value.replace(/[^\d]/g, ''));
 };
+
+const cleanCHF = (v: string) => v.replace(/[^\d]/g, ""); // erlaubt auch "CHF -"
+const displayCHF = (raw: string) => raw ? formatCurrency(Number(raw)) : "";
 
 export default function Index() {
   const [currentStep, setCurrentStep] = useState(1);
@@ -97,6 +192,76 @@ export default function Index() {
   useEffect(() => {
     localStorage.setItem('mortgageCalculator', JSON.stringify(state));
   }, [state]);
+
+  // Nutzung-Flag
+  const isOwnerOccupied = state.usage === "eigennutzung";
+
+  const pwRef = useRef<HTMLInputElement | null>(null);
+  const pillarRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isValidDob(state.borrowerDob)) return;
+    const yrs = yearsToRetirementFromDob(state.borrowerDob, state.gender || "male");
+    if (Number.isNaN(yrs)) return;
+    if (state.yearsToRetirement !== String(yrs)) {
+        setState(prev => ({ ...prev, yearsToRetirement: String(yrs) }));
+    }
+  }, [state.borrowerDob, state.gender]);
+
+  // Nutzung umgeschaltet?
+  useEffect(() => {
+    if (!isOwnerOccupied) {
+      // nicht Eigennutzung -> 0 + disable + State setzen
+      if (pwRef.current) pwRef.current.value = "0";
+      if (pillarRef.current) pillarRef.current.value = "0";
+      setState(p => ({ ...p, pensionWithdrawal: "0", pillarWithdrawal: "0" }));
+    } else {
+      // Eigennutzung -> aus State anzeigen (formatiert)
+      if (pwRef.current) {
+        const d = state.pensionWithdrawal ? fmtCH(state.pensionWithdrawal) : "";
+        pwRef.current.value = d;
+      }
+      if (pillarRef.current) {
+        const d = state.pillarWithdrawal ? fmtCH(state.pillarWithdrawal) : "";
+        pillarRef.current.value = d;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwnerOccupied]);
+
+  // Nur DOM filtern – KEIN React-State beim Tippen!
+  const handleNumericInput: React.FormEventHandler<HTMLInputElement> = (e) => {
+    const el = e.currentTarget;
+    const digits = onlyDigits(el.value);
+    if (el.value !== digits) el.value = digits;
+  };
+
+  const commitPw = () => {
+    const el = pwRef.current;
+    if (!el) return;
+    const n = Number(onlyDigits(el.value));
+    if (!n) {
+      el.value = "";                                        // leer anzeigen
+      setState(p => ({ ...p, pensionWithdrawal: "" }));     // global leer
+      return;
+    }
+    setState(p => ({ ...p, pensionWithdrawal: String(n) })); // global n
+    el.value = fmtCH(String(n));                             // Anzeige formatiert
+  };
+
+  const commitPillar = () => {
+    const el = pillarRef.current;
+    if (!el) return;
+    const n = Number(onlyDigits(el.value));
+    if (!n) {
+      el.value = "";
+      setState(p => ({ ...p, pillarWithdrawal: "" }));
+      return;
+    }
+    setState(p => ({ ...p, pillarWithdrawal: String(n) }));
+    el.value = fmtCH(String(n));
+  };
+
 
   // Calculate derived values
   const calculations = {
@@ -153,12 +318,21 @@ export default function Index() {
 
     switch (step) {
       case 1:
-        if (!state.purchasePrice) newErrors.purchasePrice = "Kaufpreis ist erforderlich";
-        if (!state.downPayment) newErrors.downPayment = "Eigenkapital ist erforderlich";
-        if (!state.interestRate) newErrors.interestRate = "Zinssatz ist erforderlich";
+        if (!state.borrowerDob || !isValidDob(state.borrowerDob)) {
+            newErrors.borrowerDob = "Geburtstag im Format dd.mm.yyyy eingeben";
+        }
+        if (!state.yearsToRetirement) {
+            newErrors.yearsToRetirement = "Anzahl Jahre bis Pension ist erforderlich";
+        } else if (Number(state.yearsToRetirement) <= 0) {
+          newErrors.yearsToRetirement = "Bitte eine positive Zahl eingeben";
+        }
+        if (!state.gender) newErrors.gender = "Geschlecht auswählen";
         break;
       case 2:
-        if (!state.grossAnnualIncome) newErrors.grossAnnualIncome = "Jahreseinkommen ist erforderlich";
+        if (!state.propertyType) newErrors.propertyType = "Art ist erforderlich";
+        if (!state.usage) newErrors.usage = "Nutzung ist erforderlich";
+        if (!state.investmentCost) newErrors.investmentCost = "Anlagekosten sind erforderlich";
+        if (!state.marketValue) newErrors.marketValue = "Verkehrswert ist erforderlich";
         break;
       case 3:
         if (!state.creditScore) newErrors.creditScore = "Kreditwürdigkeit ist erforderlich";
@@ -271,130 +445,135 @@ export default function Index() {
         return (
           <div className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="purchasePrice">Kaufpreis der Immobilie *</Label>
+              <Label htmlFor="closingCostRate">Nebenkostenansatz (%)</Label>
               <Input
-                id="purchasePrice"
-                placeholder="500000"
-                type="text"
-                defaultValue={state.purchasePrice ? formatCurrency(Number(state.purchasePrice)) : ''}
+                id="closingCostRate"
+                placeholder="z. B. 5"
+                defaultValue={state.closingCostRate}
                 onBlur={(e) => {
-                  const cleanValue = e.target.value.replace(/[^\d]/g, '');
-                  if (cleanValue) {
-                    // Format the input field display
-                    e.target.value = formatCurrency(Number(cleanValue));
-                    // Update state for calculations
-                    setState(prev => ({
-                      ...prev,
-                      purchasePrice: cleanValue
-                    }));
+                  const clean = e.target.value.replace(/[^0-9.]/g, "");
+                  if (clean === "") {
+                    // leer lassen, wenn nichts eingegeben wurde
+                    setState(prev => ({ ...prev, closingCostRate: "" }));
+                    e.target.value = "";
+                    return;
                   }
+                  const clamped = clampPercent(Number(clean));
+                  // im Feld ohne % anzeigen (du formatierst Prozente sonst auch „roh“)
+                  e.target.value = String(clamped);
+                  setState(prev => ({ ...prev, closingCostRate: String(clamped) }));
                 }}
-                onFocus={(e) => {
-                  // Remove formatting when focused so user can type freely
-                  const cleanValue = state.purchasePrice;
-                  if (cleanValue) {
-                    e.target.value = cleanValue;
-                  }
-                }}
-                className={errors.purchasePrice ? "border-red-500" : ""}
               />
-              {errors.purchasePrice && (
-                <p className="text-sm text-red-500">{errors.purchasePrice}</p>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              <Label>Eigenkapital *</Label>
-              <RadioGroup
-                value={state.downPaymentType}
-                onValueChange={(value: "percentage" | "amount") =>
-                  setState(prev => ({ ...prev, downPaymentType: value, downPayment: "" }))
-                }
-                className="flex space-x-6"
-              >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="percentage" id="percentage" />
-                  <Label htmlFor="percentage">Prozentsatz</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="amount" id="amount" />
-                  <Label htmlFor="amount">CHF-Betrag</Label>
-                </div>
-              </RadioGroup>
-
+              {/* Optional: einfache Hinweiszeile */}
+              {/*<p className="text-xs text-muted-foreground">
+                Zwischen 1 % und 100 %. Wird automatisch begrenzt.
+              </p>*/}
+              <Label htmlFor="mortgageRate">Hypothekarzinssatz (%)</Label>
               <Input
-                placeholder={state.downPaymentType === "percentage" ? "20%" : "CHF 100'000"}
-                defaultValue={state.downPaymentType === "percentage"
-                  ? state.downPayment
-                  : state.downPayment ? formatCurrency(Number(state.downPayment)) : ''
-                }
+                id="mortgageRate"
+                placeholder="z. B. 5"
+                defaultValue={state.mortgageRate}
                 onBlur={(e) => {
-                  const cleanValue = state.downPaymentType === "percentage"
-                    ? e.target.value.replace(/[^0-9.]/g, '')
-                    : e.target.value.replace(/[^\d]/g, '');
+                  const clean = e.target.value.replace(/[^0-9.]/g, "");
+                  if (clean === "") {
+                    // leer lassen, wenn nichts eingegeben wurde
+                    setState(prev => ({ ...prev, mortgageRate: "" }));
+                    e.target.value = "";
+                    return;
+                  }
+                  const clamped = clampPercent(Number(clean));
+                  // im Feld ohne % anzeigen (du formatierst Prozente sonst auch „roh“)
+                  e.target.value = String(clamped);
+                  setState(prev => ({ ...prev, mortgageRate: String(clamped) }));
+                }}
+              />
+              {/* Optional: einfache Hinweiszeile */}
+              {/*<p className="text-xs text-muted-foreground">
+                Zwischen 1 % und 100 %. Wird automatisch begrenzt.
+              </p>*/}
+              <Label htmlFor="borrowerDob">Geburtstag Kreditnehmer *</Label>
+              <Input
+                id="borrowerDob"
+                placeholder="dd.mm.yyyy"
+                defaultValue={state.borrowerDob}
+                onBlur={(e) => {
+                  // normalisieren (z.B. 01011990 -> 01.01.1990)
+                  const normalized = normalizeDob(e.target.value);
+                  e.target.value = normalized;
 
-                  if (cleanValue) {
-                    // Format display for amount type
-                    if (state.downPaymentType === "amount") {
-                      e.target.value = formatCurrency(Number(cleanValue));
+                  // State setzen
+                  setState(prev => {
+                    const next = { ...prev, borrowerDob: normalized };
+                    if (isValidDob(normalized)) {
+                      const yrs = yearsToRetirementFromDob(
+                        normalized,
+                        prev.gender || "male" // Default: Mann
+                      );
+                      if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
                     }
-                    // Update state
-                    setState(prev => ({
-                      ...prev,
-                      downPayment: cleanValue
-                    }));
-                  }
+                    return next;
+                  });
+                  const errs = getValidationErrors(1);
+                  setErrors(errs);
                 }}
                 onFocus={(e) => {
-                  // Remove formatting when focused
-                  if (state.downPaymentType === "amount" && state.downPayment) {
-                    e.target.value = state.downPayment;
-                  }
+                  // nichts Besonderes nötig; Nutzer kann direkt tippen
                 }}
-                className={errors.downPayment ? "border-red-500" : ""}
+                className={errors.borrowerDob ? "border-red-500" : ""}
               />
-              {errors.downPayment && (
-                <p className="text-sm text-red-500">{errors.downPayment}</p>
+              {errors.borrowerDob && (
+                <p className="text-sm text-red-500">{errors.borrowerDob}</p>
               )}
-            </div>
+              <Label htmlFor="yearsToRetirement">Jahre bis Pension *</Label>
+              <Input
+                id="yearsToRetirement"
+                placeholder="z. B. 20"
+                defaultValue={state.yearsToRetirement}
+                onBlur={(e) => {
+                  const clean = e.target.value.replace(/[^\d]/g, "");
+                  if (clean === "") {
+                    setState(prev => ({ ...prev, yearsToRetirement: "" }));
+                    e.target.value = "";
+                    return;
+                  }
+                  e.target.value = clean;
+                  setState(prev => ({ ...prev, yearsToRetirement: clean }));
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="loanTerm">Laufzeit</Label>
-                <Select value={state.loanTerm} onValueChange={(value) =>
-                  setState(prev => ({ ...prev, loanTerm: value }))
-                }>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Laufzeit wählen" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="15">15 Jahre</SelectItem>
-                    <SelectItem value="20">20 Jahre</SelectItem>
-                    <SelectItem value="25">25 Jahre</SelectItem>
-                    <SelectItem value="30">30 Jahre</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="interestRate">Zinssatz * (%)</Label>
-                <Input
-                  id="interestRate"
-                  placeholder="2.5"
-                  defaultValue={state.interestRate}
-                  onBlur={(e) => {
-                    const cleanValue = e.target.value.replace(/[^0-9.]/g, '');
-                    setState(prev => ({
-                      ...prev,
-                      interestRate: cleanValue
-                    }));
-                  }}
-                  className={errors.interestRate ? "border-red-500" : ""}
-                />
-                {errors.interestRate && (
-                  <p className="text-sm text-red-500">{errors.interestRate}</p>
-                )}
-              </div>
+                  // sofortige Validierung
+                  const errs = getValidationErrors(1);
+                  setErrors(errs);
+                }}
+                className={errors.yearsToRetirement ? "border-red-500" : ""}
+              />
+              {errors.yearsToRetirement && (
+                <p className="text-sm text-red-500">{errors.yearsToRetirement}</p>
+              )}
+              <Label htmlFor="gender">Geschlecht *</Label>
+                  <Select
+                    value={state.gender}
+                    onValueChange={(value: "male" | "female" | "diverse") =>
+                          setState(prev => {
+                              const next = { ...prev, gender: value };
+                              if (isValidDob(prev.borrowerDob)) {
+                                const yrs = yearsToRetirementFromDob(prev.borrowerDob, value);
+                                if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
+                              }
+                              return next;
+                            })
+                    }
+                  >
+                    <SelectTrigger id="gender" className={errors.gender ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Geschlecht auswählen" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="female">Weiblich</SelectItem>
+                      <SelectItem value="male">Männlich</SelectItem>
+                      <SelectItem value="diverse">Divers</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {errors.gender && (
+                    <p className="text-sm text-red-500">{errors.gender}</p>
+                  )}
             </div>
           </div>
         );
@@ -402,142 +581,202 @@ export default function Index() {
       case 2:
         return (
           <div className="space-y-6">
+            {/* Art */}
             <div className="space-y-2">
-              <Label htmlFor="grossAnnualIncome">Bruttojahreseinkommen *</Label>
-              <Input
-                id="grossAnnualIncome"
-                placeholder="75000"
-                type="text"
-                defaultValue={state.grossAnnualIncome ? formatCurrency(Number(state.grossAnnualIncome)) : ''}
-                onBlur={(e) => {
-                  const cleanValue = e.target.value.replace(/[^\d]/g, '');
-                  if (cleanValue) {
-                    // Format the input field display
-                    e.target.value = formatCurrency(Number(cleanValue));
-                    // Update state for calculations
-                    setState(prev => ({
-                      ...prev,
-                      grossAnnualIncome: cleanValue
-                    }));
-                  }
-                }}
-                onFocus={(e) => {
-                  // Remove formatting when focused so user can type freely
-                  const cleanValue = state.grossAnnualIncome;
-                  if (cleanValue) {
-                    e.target.value = cleanValue;
-                  }
-                }}
-                className={errors.grossAnnualIncome ? "border-red-500" : ""}
-              />
-              {errors.grossAnnualIncome && (
-                <p className="text-sm text-red-500">{errors.grossAnnualIncome}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="monthlyDebts">Monatliche Schuldenzahlungen</Label>
-              <Input
-                id="monthlyDebts"
-                placeholder="500"
-                type="text"
-                defaultValue={state.monthlyDebts ? formatCurrency(Number(state.monthlyDebts)) : ''}
-                onBlur={(e) => {
-                  const cleanValue = e.target.value.replace(/[^\d]/g, '');
-                  if (cleanValue) {
-                    // Format the input field display
-                    e.target.value = formatCurrency(Number(cleanValue));
-                    // Update state for calculations
-                    setState(prev => ({
-                      ...prev,
-                      monthlyDebts: cleanValue
-                    }));
-                  }
-                }}
-                onFocus={(e) => {
-                  // Remove formatting when focused so user can type freely
-                  const cleanValue = state.monthlyDebts;
-                  if (cleanValue) {
-                    e.target.value = cleanValue;
-                  }
-                }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="propertyTax">Jährliche Grundsteuer</Label>
-                <Input
-                  id="propertyTax"
-                  placeholder="3000"
-                  type="text"
-                  defaultValue={state.propertyTax ? formatCurrency(Number(state.propertyTax)) : ''}
-                  onBlur={(e) => {
-                    const cleanValue = e.target.value.replace(/[^\d]/g, '');
-                    if (cleanValue) {
-                      // Format the input field display
-                      e.target.value = formatCurrency(Number(cleanValue));
-                      // Update state for calculations
-                      setState(prev => ({
-                        ...prev,
-                        propertyTax: cleanValue
-                      }));
-                    }
-                  }}
-                  onFocus={(e) => {
-                    // Remove formatting when focused so user can type freely
-                    const cleanValue = state.propertyTax;
-                    if (cleanValue) {
-                      e.target.value = cleanValue;
-                    }
-                  }}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="homeInsurance">Jährliche Gebäudeversicherung</Label>
-                <Input
-                  id="homeInsurance"
-                  placeholder="1500"
-                  type="text"
-                  defaultValue={state.homeInsurance ? formatCurrency(Number(state.homeInsurance)) : ''}
-                  onBlur={(e) => {
-                    const cleanValue = e.target.value.replace(/[^\d]/g, '');
-                    if (cleanValue) {
-                      // Format the input field display
-                      e.target.value = formatCurrency(Number(cleanValue));
-                      // Update state for calculations
-                      setState(prev => ({
-                        ...prev,
-                        homeInsurance: cleanValue
-                      }));
-                    }
-                  }}
-                  onFocus={(e) => {
-                    // Remove formatting when focused so user can type freely
-                    const cleanValue = state.homeInsurance;
-                    if (cleanValue) {
-                      e.target.value = cleanValue;
-                    }
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="pmiRate">Hypothekenversicherung (% jährlich)</Label>
-              <Input
-                id="pmiRate"
-                placeholder="0.5"
-                defaultValue={state.pmiRate}
-                onBlur={(e) => {
-                  const cleanValue = e.target.value.replace(/[^0-9.]/g, '');
+              <Label htmlFor="propertyType">Art *</Label>
+              <Select
+                value={state.propertyType}
+                onValueChange={(label) => {
+                  const forced = forcedUsageFromType(label);
                   setState(prev => ({
                     ...prev,
-                    pmiRate: cleanValue
+                    propertyType: label,
+                    // falls Art eine Nutzung erzwingt, gleich mitsetzen,
+                    // sonst bisherige Nutzung beibehalten
+                    usage: forced ?? prev.usage,
                   }));
                 }}
-              />
+              >
+                <SelectTrigger className={errors.propertyType ? "border-red-500" : ""}>
+                  <SelectValue placeholder="Art auswählen" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Mehrfamilienhaus fremdvermietet">Mehrfamilienhaus fremdvermietet</SelectItem>
+                  <SelectItem value="Einfamilienhaus selbstgenutzt">Einfamilienhaus selbstgenutzt</SelectItem>
+                  <SelectItem value="Stockwerkeigentum selbstgenutzt">Stockwerkeigentum selbstgenutzt</SelectItem>
+                  <SelectItem value="Ferienobjekt / Luxus">Ferienobjekt / Luxus</SelectItem>
+                  <SelectItem value="Bauland">Bauland</SelectItem>
+                  <SelectItem value="Einfamilienhaus fremdvermietet">Einfamilienhaus fremdvermietet</SelectItem>
+                  <SelectItem value="Stockwerkeigentum fremdvermietet">Stockwerkeigentum fremdvermietet</SelectItem>
+                </SelectContent>
+              </Select>
+              {errors.propertyType && <p className="text-sm text-red-500">{errors.propertyType}</p>}
+            </div>
+
+            {/* Nutzung */}
+            <div className="space-y-2">
+              <Label htmlFor="usage">Nutzung *</Label>
+              {(() => {
+                const forced = forcedUsageFromType(state.propertyType);
+                const value = forced ?? state.usage;
+                const disabled = Boolean(forced);
+
+                return (
+                  <>
+                    <Select
+                      value={value}
+                      onValueChange={(v) => {
+                        // nur erlauben, wenn NICHT erzwungen
+                        if (!disabled) setState(prev => ({ ...prev, usage: v }));
+                      }}
+                      disabled={disabled}
+                    >
+                      <SelectTrigger className={errors.usage ? "border-red-500" : ""}>
+                        <SelectValue placeholder="Nutzung auswählen" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="eigennutzung">Eigennutzung</SelectItem>
+                        <SelectItem value="vermietet">Vermietet</SelectItem>
+                        <SelectItem value="zweitnutzung">Zweitnutzung</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {disabled && (
+                      <p className="text-xs text-muted-foreground">
+                        Nutzung durch Art vorgegeben: {value === "eigennutzung" ? "Eigennutzung" : "Vermietet"}.
+                      </p>
+                    )}
+                    {errors.usage && <p className="text-sm text-red-500">{errors.usage}</p>}
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Anlagekosten & Verkehrswert */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="investmentCost">Anlagekosten (CHF) *</Label>
+                <Input
+                  id="investmentCost"
+                  placeholder="CHF 1’000’000.00"
+                  type="text"
+                  defaultValue={displayCHF(state.investmentCost)}
+                  onBlur={(e) => {
+                    const clean = cleanCHF(e.target.value);
+                    e.target.value = displayCHF(clean);
+                    setState(prev => {
+                      const next: CalculatorState = { ...prev, investmentCost: clean };
+                      // solange verknüpft, Verkehrswert automatisch nachziehen
+                      if (prev.isMarketLinked) next.marketValue = clean;
+                      return next;
+                    });
+                  }}
+                  onFocus={(e) => { if (state.investmentCost) e.target.value = state.investmentCost; }}
+                  className={errors.investmentCost ? "border-red-500" : ""}
+                />
+                {errors.investmentCost && <p className="text-sm text-red-500">{errors.investmentCost}</p>}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="marketValue">Verkehrswert (CHF) *</Label>
+                  {/* kleiner Toggle-Hinweis */}
+                  <span className="text-xs text-muted-foreground">
+                    {state.isMarketLinked ? "∼ folgt Anlagekosten" : "manuell gesetzt"}
+                  </span>
+                </div>
+                <Input
+                  id="marketValue"
+                  placeholder="CHF 1’000’000.00"
+                  type="text"
+                  defaultValue={displayCHF(state.marketValue || state.investmentCost)}
+                  onBlur={(e) => {
+                    const clean = cleanCHF(e.target.value);
+                    e.target.value = displayCHF(clean);
+                    setState(prev => ({ ...prev, marketValue: clean || prev.investmentCost, isMarketLinked: false }));
+                  }}
+                  onFocus={(e) => {
+                    const current = state.marketValue || (state.isMarketLinked ? state.investmentCost : "");
+                    if (current) e.target.value = current;
+                  }}
+                  className={errors.marketValue ? "border-red-500" : ""}
+                />
+                {errors.marketValue && <p className="text-sm text-red-500">{errors.marketValue}</p>}
+
+                {/* Optional: Link/Unlink Button */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="mt-1 h-7 px-2 text-xs"
+                  onClick={() => setState(prev => {
+                    const link = !prev.isMarketLinked;
+                    return {
+                      ...prev,
+                      isMarketLinked: link,
+                      marketValue: link ? prev.investmentCost : prev.marketValue
+                    };
+                  })}
+                >
+                  {state.isMarketLinked ? "Verknüpfung lösen" : "Mit Anlagekosten verknüpfen"}
+                </Button>
+              </div>
+            </div>
+
+            {/* Finanzierungsquellen */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pensionWithdrawal">Pensionskassenvorbezug (CHF)</Label>
+                <Input
+                  id="pensionWithdrawal"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  // UNCONTROLLED: KEIN value, KEIN state beim Tippen
+                  defaultValue={isOwnerOccupied ? (state.pensionWithdrawal ? fmtCH(state.pensionWithdrawal) : "") : "0"}
+                  ref={pwRef}
+                  onInput={handleNumericInput}
+                  onFocus={(e) => { if (isOwnerOccupied) e.currentTarget.value = onlyDigits(e.currentTarget.value); }}
+                  onBlur={commitPw}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  disabled={!isOwnerOccupied}
+                  placeholder={isOwnerOccupied ? "z. B. 50'000" : "0"}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {formatCurrency(Number(state.pensionWithdrawal || "0"))}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="pillarWithdrawal">LVP / 3a-Bezug (CHF)</Label>
+                <Input
+                  id="pillarWithdrawal"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  defaultValue={isOwnerOccupied ? (state.pillarWithdrawal ? fmtCH(state.pillarWithdrawal) : "") : "0"}
+                  ref={pillarRef}
+                  onInput={handleNumericInput}
+                  onFocus={(e) => { if (isOwnerOccupied) e.currentTarget.value = onlyDigits(e.currentTarget.value); }}
+                  onBlur={commitPillar}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  disabled={!isOwnerOccupied}
+                  placeholder={isOwnerOccupied ? "z. B. 10'000" : "0"}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {formatCurrency(Number(state.pillarWithdrawal || "0"))}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="cashEquity">Barmittel (CHF)</Label>
+                <Input
+                  id="cashEquity"
+                  placeholder="CHF 250’000.00"
+                  type="text"
+                  defaultValue={displayCHF(state.cashEquity)}
+                  onBlur={(e) => { const clean = cleanCHF(e.target.value); e.target.value = displayCHF(clean); setState(p => ({...p, cashEquity: clean})); }}
+                  onFocus={(e) => { if (state.cashEquity) e.target.value = state.cashEquity; }}
+                />
+              </div>
             </div>
           </div>
         );
@@ -545,87 +784,80 @@ export default function Index() {
       case 3:
         return (
           <div className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="creditScore">Kreditwürdigkeit *</Label>
-              <Select value={state.creditScore} onValueChange={(value) =>
-                setState(prev => ({ ...prev, creditScore: value }))
-              }>
-                <SelectTrigger className={errors.creditScore ? "border-red-500" : ""}>
-                  <SelectValue placeholder="Kreditwürdigkeit auswählen" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="excellent">Ausgezeichnet (750+)</SelectItem>
-                  <SelectItem value="good">Gut (700-749)</SelectItem>
-                  <SelectItem value="fair">Befriedigend (650-699)</SelectItem>
-                  <SelectItem value="poor">Schwach (600-649)</SelectItem>
-                  <SelectItem value="bad">Schlecht (unter 600)</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.creditScore && (
-                <p className="text-sm text-red-500">{errors.creditScore}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="employmentType">Beschäftigungsart *</Label>
-              <Select value={state.employmentType} onValueChange={(value) =>
-                setState(prev => ({ ...prev, employmentType: value }))
-              }>
-                <SelectTrigger className={errors.employmentType ? "border-red-500" : ""}>
-                  <SelectValue placeholder="Beschäftigungsart auswählen" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="fullTime">Vollzeitangestellt</SelectItem>
-                  <SelectItem value="partTime">Teilzeitangestellt</SelectItem>
-                  <SelectItem value="selfEmployed">Selbständig</SelectItem>
-                  <SelectItem value="contract">Auftragnehmer</SelectItem>
-                  <SelectItem value="retired">Pensioniert</SelectItem>
-                  <SelectItem value="other">Andere</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.employmentType && (
-                <p className="text-sm text-red-500">{errors.employmentType}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label>Voraussichtliches Einzugsdatum</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !state.moveInDate && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {state.moveInDate ? format(state.moveInDate, "dd.MM.yyyy") : "Datum auswählen"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={state.moveInDate}
-                    onSelect={(date) => setState(prev => ({ ...prev, moveInDate: date }))}
-                    initialFocus
+            {/* Einkommen nebeneinander */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Einkommen Er */}
+                <div className="space-y-2">
+                  <Label htmlFor="incomeEr">Jahreseinkommen Brutto (m)</Label>
+                  <Input
+                    id="incomeEr"
+                    type="text"
+                    placeholder="CHF 150'000"
+                    defaultValue={displayCHF(state.incomeEr)}
+                    onBlur={(e) => {
+                      const clean = cleanCHF(e.target.value);
+                      e.target.value = displayCHF(clean);
+                      setState(p => ({ ...p, incomeEr: clean }));
+                    }}
+                    onFocus={(e) => { if (state.incomeEr) e.currentTarget.value = state.incomeEr; }}
+                    inputMode="numeric"
                   />
-                </PopoverContent>
-              </Popover>
+                </div>
+
+                {/* Einkommen Sie */}
+                <div className="space-y-2">
+                  <Label htmlFor="incomeSie">Jahreseinkommen Brutto (f)</Label>
+                  <Input
+                    id="incomeSie"
+                    type="text"
+                    placeholder="CHF 150'000"
+                    defaultValue={displayCHF(state.incomeSie)}
+                    onBlur={(e) => {
+                      const clean = cleanCHF(e.target.value);
+                      e.target.value = displayCHF(clean);
+                      setState(p => ({ ...p, incomeSie: clean }));
+                    }}
+                    onFocus={(e) => { if (state.incomeSie) e.currentTarget.value = state.incomeSie; }}
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+
+
+            {/* Weitere Kreditbelastungen */}
+            <div className="space-y-2">
+              <Label htmlFor="otherLoans">Weitere Kreditbelastungen (Leasing / Konsumkredit)</Label>
+              <Input
+                id="otherLoans"
+                type="text"
+                placeholder="CHF 0"
+                defaultValue={displayCHF(state.otherLoans)}
+                onBlur={(e) => {
+                  const clean = cleanCHF(e.target.value);
+                  e.target.value = displayCHF(clean);
+                  setState(p => ({ ...p, otherLoans: clean }));
+                }}
+                onFocus={(e) => { if (state.otherLoans) e.currentTarget.value = state.otherLoans; }}
+                inputMode="numeric"
+              />
             </div>
 
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                id="firstTimeBuyer"
-                checked={state.firstTimeBuyer}
-                onChange={(e) => setState(prev => ({
-                  ...prev,
-                  firstTimeBuyer: e.target.checked
-                }))}
-                className="rounded border-gray-300"
+            {/* Weitere Belastungen */}
+            <div className="space-y-2">
+              <Label htmlFor="otherHousingCosts">Weitere Belastungen (eigene Wohnkosten)</Label>
+              <Input
+                id="otherHousingCosts"
+                type="text"
+                placeholder="CHF 0"
+                defaultValue={displayCHF(state.otherHousingCosts)}
+                onBlur={(e) => {
+                  const clean = cleanCHF(e.target.value);
+                  e.target.value = displayCHF(clean);
+                  setState(p => ({ ...p, otherHousingCosts: clean }));
+                }}
+                onFocus={(e) => { if (state.otherHousingCosts) e.currentTarget.value = state.otherHousingCosts; }}
+                inputMode="numeric"
               />
-              <Label htmlFor="firstTimeBuyer">Ich bin Erstkäufer</Label>
             </div>
           </div>
         );
@@ -641,11 +873,10 @@ export default function Index() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-slate-900 mb-2">
-            Hypotheken- & Erschwinglichkeitsrechner
+            Hypothekarrechner
           </h1>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-            Berechnen Sie Ihre Hypothekenzahlungen und ermitteln Sie, wie viel Eigenheim Sie sich
-            mit unserem umfassenden Rechner leisten können.
+            In wenigen Klicks berechen Sie Ihre Hypothek und Tragbarkeit.
           </p>
         </div>
 
@@ -667,9 +898,9 @@ export default function Index() {
           </div>
           <Progress value={(currentStep / 3) * 100} className="h-2" />
           <div className="flex justify-between mt-2 text-xs text-slate-500">
-            <span>Kreditdetails</span>
-            <span>Einkommen & Ausgaben</span>
-            <span>Zusätzliche Infos</span>
+            <span>Zins & Personenangaben</span>
+            <span>Finanzierung</span>
+            <span>Tragbarkeit</span>
           </div>
         </div>
 
