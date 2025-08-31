@@ -26,8 +26,7 @@ interface CalculatorState {
   borrowerDob: string; //dd.mm.yyyy
   yearsToRetirement: string;
   gender: "male" | "female" | "diverse" | "";
-  gender: "";
-    // Step 2: Income & Expenses
+  // Step 2: Income & Expenses
   grossAnnualIncome: string;
   monthlyDebts: string;
   propertyTax: string;
@@ -333,10 +332,6 @@ export default function Index() {
         if (!state.usage) newErrors.usage = "Nutzung ist erforderlich";
         if (!state.investmentCost) newErrors.investmentCost = "Anlagekosten sind erforderlich";
         if (!state.marketValue) newErrors.marketValue = "Verkehrswert ist erforderlich";
-        break;
-      case 3:
-        if (!state.creditScore) newErrors.creditScore = "Kreditwürdigkeit ist erforderlich";
-        if (!state.employmentType) newErrors.employmentType = "Beschäftigungsart ist erforderlich";
         break;
     }
 
