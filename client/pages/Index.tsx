@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Progress } from "@/components/ui/progress";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -12,28 +11,19 @@ import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon, Info, RotateCcw, Home, Calculator, DollarSign } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import ReactSpeedometer from "react-d3-speedometer";
+import DobCalendarInput from "@/components/DobCalendarInput";
+
 
 // Types for our calculator state
 interface CalculatorState {
   // Step 1: Basic Information
-  purchasePrice: string;
-  downPayment: string;
-  downPaymentType: "percentage" | "amount";
-  loanTerm: string;
-  interestRate: string;
-  closingCostRate: string; // Nebenkostenansatz in %
-  mortgageRate: string; //hypothekarzinssatz
-  borrowerDob: string; //dd.mm.yyyy
+  purchasePriceCh: string;   // Kaufpreis (CHF)
+  investments: string;       // Investitionen (CHF)
+  monthlyNetRent?: string;   // Nettomiete pro Monat (CHF), nur bei Fremdvermietung
+  borrowerDob: string;     // dd.mm.yyyy
   yearsToRetirement: string;
-  gender: "male" | "female" | "diverse" | "";
-  // Step 2: Income & Expenses
-  grossAnnualIncome: string;
-  monthlyDebts: string;
-  propertyTax: string;
-  homeInsurance: string;
-  pmiRate: string;
-
-
+  gender: "male" | "female" | "";
 
   // Step 2: Objektangaben & Finanzierung
   propertyType: string;    // Art
@@ -43,37 +33,51 @@ interface CalculatorState {
   pensionWithdrawal: string; // Pensionskassenvorbezug (CHF)
   pillarWithdrawal: string;  // LVP / 3a-Bezug (CHF)
   cashEquity: string;        // Barmittel (CHF)
-  isMarketLinked: boolean;   // steuert, ob Verkehrswert an Anlagekosten gekoppelt bleibt
-  
+  mortgageNotes: string; // Schuldbriefe (CHF)
+  collateral: string;    // Sicherstellungen (CHF)
   // Step 3: Additional Details
   incomeEr: string;              // CHF, z.B. "150000"
   incomeSie: string;             // CHF
+  otherPropertiesBurden?: string; // kalk. Belastung weiterer Liegenschaften (CHF/Jahr), optional
   otherLoans: string;            // CHF (Leasing / Konsum)
   otherHousingCosts: string;     // CHF (eigene Wohnkosten)
 }
 
 const defaultState: CalculatorState = {
-  closingCostRate: "",
-  mortgageRate: "",
+  // Step 1
+  purchasePriceCh: "",
+  investments: "",
+  monthlyNetRent: "",
   borrowerDob: "01.01.1990",
   yearsToRetirement: "",
-    propertyType: "",   // z.B. "Einfamilienhaus fremdvermietet"
+  gender: "",
+
+  // Objektangaben & Finanzierung
+  propertyType: "",   // z.B. "Einfamilienhaus fremdvermietet"
   usage: "",          // z.B. "Vermietet" oder "Zweitnutzung"
   investmentCost: "", // z.B. "1000000"
   marketValue: "",    // default: folgt investmentCost
   pensionWithdrawal: "",
   pillarWithdrawal: "",
   cashEquity: "",
-  isMarketLinked: true,
+  mortgageNotes: "", // Anfangswert leer
+  collateral: "",    // Anfangswert leer
 
+  // Step 3
   incomeEr: "",
   incomeSie: "",
+  otherPropertiesBurden: "",
   otherLoans: "",
   otherHousingCosts: "",
 };
 
 //Helper formatierungen
-const clampPercent = (n: number) => Math.min(100, Math.max(1, n || 0));
+//const clampPercent = (n: number) => Math.min(100, Math.max(1, n || 0));
+const isRentedType = (label: string) =>
+  (label || "").toLowerCase().includes("fremdvermietet") || (label || "").toLowerCase() === "vermietet";
+
+const kaufpreisPlusInvestitionen = (s: CalculatorState) =>
+  parseNumber(s.purchasePriceCh || "0") + parseNumber(s.investments || "0");
 
 // 01.01.1990 -> true/false
 const isValidDob = (val: string): boolean => {
@@ -92,7 +96,7 @@ const isValidDob = (val: string): boolean => {
 };
 
 // Rentenalter CH
-const getRetirementAge = (gender: "male" | "female" | "diverse" | "") =>
+const getRetirementAge = (gender: "male" | "female" | "") =>
   gender === "female" ? 64 : 65; // default: 65
 
 // Alter in Jahren zum Stichtag
@@ -110,7 +114,7 @@ const calcAge = (dobStr: string, asOf = new Date()): number => {
 
 const yearsToRetirementFromDob = (
   dobStr: string,
-  gender: "male" | "female" | "diverse" | ""
+  gender: "male" | "female" | ""
 ): number => {
   const age = calcAge(dobStr);
   if (Number.isNaN(age) || age < 0) return NaN;
@@ -154,17 +158,58 @@ const formatCurrency = (value: number): string => {
   }).format(value);
 };
 
-const formatNumber = (value: string): string => {
-  const num = value.replace(/[^\d]/g, '');
-  return new Intl.NumberFormat('de-CH').format(Number(num));
-};
-
 const parseNumber = (value: string): number => {
   return Number(value.replace(/[^\d]/g, ''));
 };
 
 const cleanCHF = (v: string) => v.replace(/[^\d]/g, ""); // erlaubt auch "CHF -"
 const displayCHF = (raw: string) => raw ? formatCurrency(Number(raw)) : "";
+
+function ChfInputCommit({
+  id,
+  label,
+  placeholder,
+  value,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  placeholder?: string;
+  value: string;
+  onCommit: (digits: string) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [text, setText] = useState<string>(value ? displayCHF(value) : "");
+
+  useEffect(() => {
+    // Wenn der Input nicht fokussiert ist, formatierten Wert übernehmen
+    if (!focused) setText(value ? displayCHF(value) : "");
+  }, [value, focused]);
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="text"
+        inputMode="numeric"
+        placeholder={placeholder}
+        value={text}
+        onFocus={() => {
+          setFocused(true);
+          setText(value || "");
+        }}
+        onChange={(e) => setText(cleanCHF(e.target.value))}
+        onBlur={() => {
+          setFocused(false);
+          const digits = cleanCHF(text);
+          onCommit(digits);
+          setText(digits ? displayCHF(digits) : "");
+        }}
+      />
+    </div>
+  );
+}
 
 export default function Index() {
   const [currentStep, setCurrentStep] = useState(1);
@@ -177,10 +222,7 @@ export default function Index() {
     if (saved) {
       try {
         const parsedState = JSON.parse(saved);
-        setState({
-          ...parsedState,
-          moveInDate: parsedState.moveInDate ? new Date(parsedState.moveInDate) : undefined
-        });
+        setState(parsedState);
       } catch (error) {
         console.error('Error loading saved state:', error);
       }
@@ -263,46 +305,172 @@ export default function Index() {
 
 
   // Calculate derived values
+  const mortgageThresholds: Record<string, { first: number; second: number }> = {
+    "Mehrfamilienhaus fremdvermietet": { first: 0.6, second: 0.75 },
+    "Einfamilienhaus selbstgenutzt":    { first: 2/3, second: 0.80 },
+    "Stockwerkeigentum selbstgenutzt":  { first: 2/3, second: 0.80 },
+    "Ferienobjekt / Luxus":             { first: 0.50, second: 0.60 },
+    "Bauland":                          { first: 0.50, second: 0.00 },
+    "Einfamilienhaus fremdvermietet":   { first: 2/3, second: 0.75 },
+    "Stockwerkeigentum fremdvermietet": { first: 2/3, second: 0.75 },
+  };
+
   const calculations = {
-    loanAmount: () => {
-      const price = parseNumber(state.purchasePrice);
-      const down = state.downPaymentType === "percentage" 
-        ? (price * parseNumber(state.downPayment)) / 100
-        : parseNumber(state.downPayment);
-      return price - down;
+    newFinancing: () => {
+      const investment   = parseNumber(state.investmentCost);
+      const pension      = parseNumber(state.pensionWithdrawal || "0");
+      const pillar       = parseNumber(state.pillarWithdrawal  || "0");
+      const cashEquity   = parseNumber(state.cashEquity        || "0");
+      return investment - pension - pillar - cashEquity;
     },
-    monthlyPayment: () => {
-      const principal = calculations.loanAmount();
-      const monthlyRate = parseNumber(state.interestRate) / 100 / 12;
-      const numPayments = parseNumber(state.loanTerm) * 12;
-      
-      if (monthlyRate === 0) return principal / numPayments;
-      
-      const monthlyPayment = principal * 
-        (monthlyRate * Math.pow(1 + monthlyRate, numPayments)) / 
-        (Math.pow(1 + monthlyRate, numPayments) - 1);
-      
-      return monthlyPayment;
+    erhoehungSchuldbriefe: () => {
+      const nf   = calculations.newFinancing();
+      const notes = parseNumber(state.mortgageNotes || "0");
+      return nf > notes ? nf - notes : 0;
     },
-    totalMonthlyPayment: () => {
-      const base = calculations.monthlyPayment();
-      const tax = parseNumber(state.propertyTax) / 12;
-      const insurance = parseNumber(state.homeInsurance) / 12;
-      const pmi = calculations.loanAmount() * (parseNumber(state.pmiRate) / 100) / 12;
-      
-      return base + tax + insurance + pmi;
+    basisNettoBelehnung: () => {
+      const nf         = calculations.newFinancing();
+      const collateral = parseNumber(state.collateral || "0");
+      return nf - collateral;
     },
-    affordabilityRatio: () => {
-      const monthlyIncome = parseNumber(state.grossAnnualIncome) / 12;
-      const totalPayment = calculations.totalMonthlyPayment();
-      
-      return monthlyIncome > 0 ? (totalPayment / monthlyIncome) * 100 : 0;
+
+    netLeverageRatio: () => {
+      const nf = calculations.newFinancing();
+      const invest = parseNumber(state.investmentCost || "0");
+      if (nf <= 0 || invest <= 0) return 0;
+      return (calculations.basisNettoBelehnung() / invest) * 100; // Prozentwert
     },
-    maxAffordable: () => {
-      const monthlyIncome = parseNumber(state.grossAnnualIncome) / 12;
-      const maxPayment = monthlyIncome * 0.28; // 28% DTI rule
-      return maxPayment * 12; // Simplified calculation
-    }
+    firstMortgagePercent: () => {
+      return mortgageThresholds[state.propertyType]?.first ?? 0;
+    },
+    firstMortgageAbsolute: () => {
+      const invest     = parseNumber(state.investmentCost || "0");          // Anlagekosten
+      const newFin     = calculations.newFinancing();                       // Neue Finanzierung
+      const firstPct   = mortgageThresholds[state.propertyType]?.first ?? 0; // Quote für 1. Hypothek (z. B. 0.75)
+      const collateral = parseNumber(state.collateral || "0");              // Sicherstellungen (CHF)
+
+      if (invest <= 0) return 0;
+
+      // Maximale 1. Hypothek nach Richtwerten (Anlagekosten × Quote + Sicherstellungen)
+      const maxFirst = invest * firstPct + collateral;
+      // Tatsächliche 1. Hypothek darf die neue Finanzierung nicht übersteigen
+      return Math.min(newFin, maxFirst);
+    },
+    secondMortgagePercent: () => {
+      return mortgageThresholds[state.propertyType]?.second ?? 0;
+    },
+    secondMortgageAbsolute: () => {
+      const newFin  = calculations.newFinancing();
+      const firstAbs = calculations.firstMortgageAbsolute();
+      // Restbetrag ist 2. Hypothek
+      return Math.max(0, newFin - firstAbs);
+    },
+    amortizationYears: () => {
+      switch (state.propertyType) {
+        case "Einfamilienhaus selbstgenutzt":
+        case "Stockwerkeigentum selbstgenutzt":
+          const yrs = Number(state.yearsToRetirement || "0");
+          return Math.max(1, Math.min(yrs, 15));
+        case "Einfamilienhaus fremdvermietet":
+        case "Stockwerkeigentum fremdvermietet":
+          return 10;
+        case "Bauland":
+          return 1;
+        default:
+          return 0; // für Ferienobjekt/Luxus und Mehrfamilienhaus nicht gebraucht
+      }
+    },
+
+    amortizationInfo: () => {
+      const basisNet  = calculations.basisNettoBelehnung();      // Neue Finanzierung minus Sicherheiten
+      const invest    = parseNumber(state.investmentCost || "0");
+      const netRatio  = invest > 0 ? basisNet / invest : 0;
+      const firstPct  = calculations.firstMortgagePercent();
+      const secondAbs = calculations.secondMortgageAbsolute();
+      const years     = calculations.amortizationYears();
+
+      let rule, annual;
+
+      if (state.propertyType === "Mehrfamilienhaus fremdvermietet") {
+        if (netRatio <= firstPct) {
+          // keine zweite Hypothek → keine Amortisation
+          rule = "keine Amortisation";
+          annual = 0;
+        } else {
+          const byPercent = basisNet * 0.01;
+          const byTen     = secondAbs / 10;
+          annual = Math.max(byPercent, byTen);
+          rule   = "10 Jahre, mindestens 1 %";
+        }
+      } else if (state.propertyType === "Ferienobjekt / Luxus") {
+        if (netRatio <= firstPct) {
+          rule   = "keine Amortisation";
+          annual = 0;
+        } else {
+          annual = basisNet * 0.01;
+          rule   = "1 % p.a.";
+        }
+      } else {
+        // alle anderen Objektarten: 2. Hypothek / Amortisationsjahre
+        annual = years > 0 ? secondAbs / years : 0;
+        rule   = years > 0 ? `${years} Jahr${years > 1 ? "e" : ""}` : "-";
+      }
+
+      return { rule, annual };
+    },
+
+    kalkulatorischerZins: () => {
+      const nf = calculations.newFinancing();
+      return nf > 0 ? nf * 0.05 : 0; // 5% der neuen Finanzierung, nie < 0
+    },
+    kalkulatorischeNebenkosten: () => {
+      const mv = parseNumber(state.marketValue || "0"); // Verkehrswert aus State
+      return mv > 0 ? mv * 0.01 : 0; // 1% des Verkehrswerts
+    },
+    totalKalkulatorischeNebenkosten: () => {
+      const amort = calculations.amortizationInfo().annual || 0;   // kalk. Amortisation (CHF/Jahr)
+      const zins  = calculations.kalkulatorischerZins() || 0;      // 5% von Neue Finanzierung
+      const nk    = calculations.kalkulatorischeNebenkosten() || 0; // 1% von Verkehrswert
+      return amort + zins + nk;
+    },
+    annualNetRent: () => {
+      const rented = isRentedType(state.propertyType) || state.usage === "vermietet";
+      const monthly = parseNumber(state.monthlyNetRent || "0");
+      return rented && monthly > 0 ? monthly * 12 : 0;
+    },
+
+    kalkBelastung: () => {
+      const total = calculations.totalKalkulatorischeNebenkosten(); // Summe aus Amortisation + kalk. Zins + kalk. Nebenkosten
+      const rent  = calculations.annualNetRent();
+      return Math.max(total - rent, 0); // Nur wenn Miete die Kosten nicht deckt
+    },
+
+    totalGrossIncome: () => {
+      const m = parseNumber(state.incomeEr || "0");
+      const f = parseNumber(state.incomeSie || "0");
+      return m + f; // Jahresbrutto (Er + Sie)
+    },
+
+    totalIncomeAfterCalcCosts: () => {
+      const gross = calculations.totalGrossIncome();
+      const step2Belastung = calculations.kalkBelastung(); // bereits vorhanden (Total kalk. NK - Jahresmiete)
+      const other = parseNumber(state.otherPropertiesBurden || "0");
+      return gross - step2Belastung - other; // kann negativ werden, absichtlich nicht gecappt
+    },
+
+    incomeAfterStep2: () => {
+      // Jahresbrutto-Einkommen (Er + Sie) minus Kalk. Belastung aus Schritt 2
+      const gross = parseNumber(state.incomeEr || "0") + parseNumber(state.incomeSie || "0");
+      const belastung = calculations.kalkBelastung(); // bereits vorhanden
+      return gross - belastung;
+    },
+
+    tragbarkeitPct: () => {
+      const denom = calculations.incomeAfterStep2(); // Einkommen nach kalk. Kosten
+      const own   = parseNumber(state.otherHousingCosts || "0"); // Eigene Wohnkosten jährlich
+      if (denom <= 0) return NaN; // nicht berechenbar
+      return (own / denom) * 100;
+    },
   };
 
   const resetAll = () => {
@@ -327,14 +495,43 @@ export default function Index() {
         }
         if (!state.gender) newErrors.gender = "Geschlecht auswählen";
         break;
-      case 2:
-        if (!state.propertyType) newErrors.propertyType = "Art ist erforderlich";
-        if (!state.usage) newErrors.usage = "Nutzung ist erforderlich";
-        if (!state.investmentCost) newErrors.investmentCost = "Anlagekosten sind erforderlich";
-        if (!state.marketValue) newErrors.marketValue = "Verkehrswert ist erforderlich";
-        break;
-    }
+        case 2: {
+          if (!state.propertyType) newErrors.propertyType = "Art ist erforderlich";
 
+          // Nutzung bleibt wie bisher
+          if (!state.usage) newErrors.usage = "Nutzung ist erforderlich";
+
+          // NEU: Kaufpreis + Investitionen prüfen (>0)
+          const kp = parseNumber(state.purchasePriceCh || "0");
+          const inv = parseNumber(state.investments || "0");
+          if (!kp || kp <= 0) newErrors.purchasePriceCh = "Kaufpreis ist erforderlich und muss > 0 sein";
+          if (inv < 0) {
+            newErrors.investments = "Investitionen dürfen nicht negativ sein";
+          }
+
+          // Fremdvermietung → Nettomiete erforderlich
+          const rented = isRentedType(state.propertyType) || state.usage === "vermietet";
+          if (rented) {
+            const rent = parseNumber(state.monthlyNetRent || "0");
+            if (!rent || rent <= 0) newErrors.monthlyNetRent = "Nettomiete ist erforderlich und muss > 0 sein";
+          }
+          break;
+        }
+        case 3: {
+          // Einkommen: mindestens ein Feld ausgefüllt UND Summe > 0
+          const erRaw = state.incomeEr ?? "";
+          const sieRaw = state.incomeSie ?? "";
+          const er = parseNumber(erRaw || "0");
+          const sie = parseNumber(sieRaw || "0");
+          const bothEmpty = erRaw === "" && sieRaw === "";
+          const sum = er + sie;
+
+          if (bothEmpty || sum <= 0) {
+            newErrors.incomeTotal = "Mindestens ein Einkommen > 0 ist erforderlich.";
+          }
+          break;
+        }
+    }
     return newErrors;
   };
 
@@ -349,6 +546,12 @@ export default function Index() {
     return Object.keys(stepErrors).length === 0;
   };
 
+  const finish = () => {
+    // hier kannst du später z.B. einen Export/Toast machen
+    console.log("Form abgeschlossen", state);
+    // window.alert("Fertig!"); // optional visuelles Feedback
+  };
+
   const nextStep = () => {
     if (validateStep(currentStep)) {
       setCurrentStep(prev => Math.min(prev + 1, 3));
@@ -361,13 +564,15 @@ export default function Index() {
 
   // Removed auto-advance to prevent infinite re-renders
 
-  const InfoCard = ({ title, value, detail, icon: Icon }: { 
+  const InfoCard = ({ title, value, detail, icon: Icon, className }: {
     title: string; 
     value: string; 
-    detail: string; 
+    detail: React.ReactNode; // vorher: string
     icon: any;
+    className?: string; // optional
+
   }) => (
-    <Card className="relative">
+    <Card className={cn("relative", className)}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
@@ -381,7 +586,12 @@ export default function Index() {
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80">
-              <p className="text-sm">{detail}</p>
+              {/* Prüfen, ob String oder React-Element */}
+              {typeof detail === "string" ? (
+                <p className="text-sm">{detail}</p>
+              ) : (
+                detail
+              )}
             </PopoverContent>
           </Popover>
         </div>
@@ -392,133 +602,353 @@ export default function Index() {
     </Card>
   );
 
-  const InfoPanel = () => (
-    <div className="space-y-4">
-      <h2 className="text-lg font-semibold">Ihre Berechnungen</h2>
+  function Speedometer({
+    value,              // Prozentwert (0–100), NaN = nicht berechenbar
+    greenMax = 30,      // ≤30% grün
+    yellowMax = 33,     // 30–33% gelb, >33% rot
+  }: {
+    value: number;
+    greenMax?: number;
+    yellowMax?: number;
+  }) {
+    const width = 320;
+    const height = 180;
+    const cx = width / 2;
+    const cy = height - 12;
+    const r = Math.min(cx, cy) - 12;
 
-      {state.purchasePrice && (
-        <InfoCard
-          title="Hypothekenbetrag"
-          value={formatCurrency(calculations.loanAmount())}
-          detail="Dies ist der Betrag, den Sie nach Ihrem Eigenkapital leihen müssen."
-          icon={Calculator}
-        />
-      )}
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const arc = (p1: number, p2: number) => {
+      // 0% = links (-180°), 100% = rechts (0°)
+      const a1 = -180 + (p1 * 180) / 100;
+      const a2 = -180 + (p2 * 180) / 100;
+      const x1 = cx + r * Math.cos(toRad(a1));
+      const y1 = cy + r * Math.sin(toRad(a1));
+      const x2 = cx + r * Math.cos(toRad(a2));
+      const y2 = cy + r * Math.sin(toRad(a2));
+      const largeArc = a2 - a1 > 180 ? 1 : 0;
+      return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`;
+    };
 
-      {state.interestRate && state.loanTerm && calculations.loanAmount() > 0 && (
-        <InfoCard
-          title="Monatliche Rate (Kapital & Zinsen)"
-          value={formatCurrency(calculations.monthlyPayment())}
-          detail="Nur Kapital- und Zinszahlung. Enthält keine Steuern, Versicherung oder Hypothekenversicherung."
-          icon={Home}
-        />
-      )}
+    const isValid = Number.isFinite(value);
+    const pct = isValid ? Math.max(0, Math.min(100, value)) : 0;
+    const angle = -180 + (pct * 180) / 100;
+    const needleX = cx + (r - 12) * Math.cos(toRad(angle));
+    const needleY = cy + (r - 12) * Math.sin(toRad(angle));
 
-      {state.propertyTax && state.homeInsurance && (
-        <InfoCard
-          title="Gesamte monatliche Zahlung"
-          value={formatCurrency(calculations.totalMonthlyPayment())}
-          detail="Enthält Kapital, Zinsen, Steuern, Versicherung und Hypothekenversicherung."
-          icon={DollarSign}
-        />
-      )}
+    return (<TragbarkeitGauge value={calculations.tragbarkeitPct()} />
 
-      {state.grossAnnualIncome && calculations.totalMonthlyPayment() > 0 && (
-        <InfoCard
-          title="Schulden-zu-Einkommen-Verhältnis"
-          value={`${calculations.affordabilityRatio().toFixed(1)}%`}
-          detail="Ihre Wohnungszahlung als Prozentsatz des Brutto-Monatseinkommens. Sollte idealerweise unter 28% liegen."
-          icon={Calculator}
-        />
-      )}
+    );
+  }
+
+  function TragbarkeitGauge({ value }: { value: number }) {
+    const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    return (
+      <div className="flex justify-center">
+      <ReactSpeedometer
+        minValue={0}
+        maxValue={100}
+        value={v}
+        width={380}                    // a bit larger to avoid clipping
+        height={230}
+        ringWidth={26}
+        needleHeightRatio={0.78}
+        needleColor="#0f172a"
+        textColor="#0f172a"
+        valueTextFontSize="16"
+        currentValueText={`${v.toFixed(1)}%`} // centered under the peak
+        customSegmentStops={[0, 30, 33, 100]}                 // green / yellow / red
+        segmentColors={["#10b981", "#f59e0b", "#ef4444"]}
+        maxSegmentLabels={0}                                   // hide default 0/50/100 ticks
+        labelFontSize="10"                                     // (kept small if you re-enable ticks)
+        customSegmentLabels={[
+          { text: "≤30%", color: "#0f172a", fontSize: "10" },
+          { text: "30%–33%", color: "#0f172a", fontSize: "10" },
+          { text: ">33%-100%", color: "#0f172a", fontSize: "10" },
+        ]}
+        needleTransitionDuration={500}
+      />
     </div>
-  );
+    );
+  }
+
+
+
+
+  const showTotalIncomeCard =
+  (state.incomeEr !== "" || state.incomeSie !== "") || calculations.totalGrossIncome() > 0;
+  const showTragbarkeitCard = (state.incomeEr !== "" || state.incomeSie !== "");
+
+
+  const InfoPanel = () => {
+    // Sichtbarkeitslogik für Einkommen & Side-by-Side
+    const incomeSum = calculations.totalGrossIncome();
+    const showTotalIncomeCard =
+      (state.incomeEr !== "" || state.incomeSie !== "") || incomeSum > 0;
+    const sideBySide = currentStep === 3 && incomeSum > 0;
+
+    return (
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Ihre Berechnungen</h2>
+
+        {/* Neue Finanzierung */}
+        {state.investmentCost && (
+          <InfoCard
+            title="Neue Finanzierung"
+            value={formatCurrency(calculations.newFinancing())}
+            detail="Anlagekosten minus PK-Vorbezug, LVP-Bezug und Barmittel."
+            icon={DollarSign}
+          />
+        )}
+
+        {/* Erhöhung Schuldbriefe & Basis Nettobelehnung */}
+        {state.investmentCost && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <InfoCard
+              title="Erhöhung Schuldbriefe"
+              value={formatCurrency(calculations.erhoehungSchuldbriefe())}
+              detail="Neue Finanzierung minus Schuldbriefe (min. 0)"
+              icon={DollarSign}
+            />
+            <InfoCard
+              title="Basis Nettobelehnung"
+              value={formatCurrency(calculations.basisNettoBelehnung())}
+              detail="Neue Finanzierung minus Sicherstellungen"
+              icon={DollarSign}
+              className="bg-green-50"
+            />
+          </div>
+        )}
+
+        {/* Details + Total Einkommen: nebeneinander ODER untereinander */}
+        {sideBySide ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Details */}
+            <InfoCard
+              title="Details"
+              value="–"
+              icon={Calculator}
+              detail={
+                <>
+                  <p className="text-sm"><strong>Nettobelehnung:</strong> {calculations.netLeverageRatio().toFixed(2)}%</p>
+                  <p className="text-sm">
+                    <strong>1. Hypothek (Prozent | CHF):</strong>{" "}
+                    {(calculations.firstMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.firstMortgageAbsolute())}
+                  </p>
+                  <p className="text-sm">
+                    <strong>2. Hypothek (Prozent | CHF):</strong>{" "}
+                    {(calculations.secondMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.secondMortgageAbsolute())}
+                  </p>
+                  <p className="text-sm">
+                    <strong>Amortisation:</strong> {calculations.amortizationInfo().rule}
+                  </p>
+                  <p className="text-sm">
+                    <strong>Kalk. Zins (5%):</strong> {formatCurrency(calculations.kalkulatorischerZins())}
+                  </p>
+                  <p className="text-sm">
+                    <strong>Kalk. Nebenkosten (1%):</strong> {formatCurrency(calculations.kalkulatorischeNebenkosten())}
+                  </p>
+                  <p className="text-sm">
+                    <strong>Jährliche Nettomiete:</strong> {formatCurrency(calculations.annualNetRent())}
+                  </p>
+
+                  {/* Totals */}
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="rounded-lg border px-3 py-2 bg-slate-50">
+                      <p className="text-xs uppercase tracking-wide text-slate-600">Kalk. Kosten</p>
+                      <div className="text-base font-bold">
+                        {formatCurrency(calculations.totalKalkulatorischeNebenkosten())}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border px-3 py-2 bg-amber-50">
+                      <p className="text-xs uppercase tracking-wide text-slate-700">Kalk. Belastung</p>
+                      <div className="text-base font-bold">
+                        {formatCurrency(calculations.kalkBelastung())}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              }
+            />
+
+            {/* Total Einkommen (nach kalk. Kosten) */}
+            {showTotalIncomeCard && (
+              <InfoCard
+                title="Einkommen (nach kalk. Kosten)"
+                value={formatCurrency(calculations.totalIncomeAfterCalcCosts())}
+                icon={DollarSign}
+                detail={
+                  <>
+                    <p className="text-sm">
+                      <strong>Brutto Einkommen (Haushalt):</strong> {formatCurrency(calculations.totalGrossIncome())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>− Kalk. Belastung:</strong> {formatCurrency(calculations.kalkBelastung())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>− Kalk. Belastung weitere Liegenschaften:</strong>{" "}
+                      {formatCurrency(parseNumber(state.otherPropertiesBurden || "0"))}
+                    </p>
+                  </>
+                }
+              />
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Details (untereinander-Variante) */}
+            {state.investmentCost && state.propertyType && (
+              <InfoCard
+                title="Details"
+                value="–"
+                icon={Calculator}
+                detail={
+                  <>
+                    <p className="text-sm"><strong>Nettobelehnung:</strong> {calculations.netLeverageRatio().toFixed(2)}%</p>
+                    <p className="text-sm">
+                      <strong>1. Hypothek (% | CHF):</strong>{" "}
+                      {(calculations.firstMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.firstMortgageAbsolute())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>2. Hypothek (% | CHF):</strong>{" "}
+                      {(calculations.secondMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.secondMortgageAbsolute())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>Amortisation:</strong> {calculations.amortizationInfo().rule}
+                    </p>
+                    <p className="text-sm">
+                      <strong>Kalk. Zins:</strong> {formatCurrency(calculations.kalkulatorischerZins())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>Kalk. Nebenkosten:</strong> {formatCurrency(calculations.kalkulatorischeNebenkosten())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>Jährliche Nettomiete:</strong> {formatCurrency(calculations.annualNetRent())}
+                    </p>
+
+                    {/* Totals */}
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-lg border px-3 py-2 bg-slate-50">
+                        <p className="text-xs uppercase tracking-wide text-slate-600">Kalk. Kosten</p>
+                        <div className="text-base font-bold">
+                          {formatCurrency(calculations.totalKalkulatorischeNebenkosten())}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border px-3 py-2 bg-amber-50">
+                        <p className="text-xs uppercase tracking-wide text-slate-700">Kalk. Belastung</p>
+                        <div className="text-base font-bold">
+                          {formatCurrency(calculations.kalkBelastung())}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                }
+              />
+            )}
+
+            {/* Total Einkommen (untereinander-Variante) */}
+            {showTotalIncomeCard && (
+              <InfoCard
+                title="Total Einkommen (nach kalk. Kosten)"
+                value={formatCurrency(calculations.totalIncomeAfterCalcCosts())}
+                icon={DollarSign}
+                detail={
+                  <>
+                    <p className="text-sm">
+                      <strong>Brutto Einkommen (Er + Sie):</strong> {formatCurrency(calculations.totalGrossIncome())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>− Kalk. Belastung (Schritt 2):</strong> {formatCurrency(calculations.kalkBelastung())}
+                    </p>
+                    <p className="text-sm">
+                      <strong>− Kalk. Belastung weitere Liegenschaften:</strong>{" "}
+                      {formatCurrency(parseNumber(state.otherPropertiesBurden || "0"))}
+                    </p>
+                  </>
+                }
+              />
+            )}
+          </>
+        )}
+
+        {/* Speedometer (am Schluss, ohne Karte) */}
+        {(state.incomeEr !== "" || state.incomeSie !== "") && (
+          <div className="mt-6">
+            <h3 className="text-base font-semibold text-center">Tragbarkeit</h3>
+            <div className="flex justify-center">
+              <Speedometer value={calculations.tragbarkeitPct()} greenMax={30} yellowMax={33} />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const StepContent = () => {
     switch (currentStep) {
       case 1:
-        return (
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="closingCostRate">Nebenkostenansatz (%)</Label>
-              <Input
-                id="closingCostRate"
-                placeholder="z. B. 5"
-                defaultValue={state.closingCostRate}
-                onBlur={(e) => {
-                  const clean = e.target.value.replace(/[^0-9.]/g, "");
-                  if (clean === "") {
-                    // leer lassen, wenn nichts eingegeben wurde
-                    setState(prev => ({ ...prev, closingCostRate: "" }));
-                    e.target.value = "";
-                    return;
+      return (
+        <div className="space-y-6">
+          {/* Reihe 2: Geschlecht */}
+          <div className="space-y-2">
+            <Label htmlFor="gender">Geschlecht *</Label>
+            <Select
+              value={state.gender}
+              onValueChange={(value: "male" | "female") =>
+                setState(prev => {
+                  const next = { ...prev, gender: value };
+                  if (isValidDob(prev.borrowerDob)) {
+                    const yrs = yearsToRetirementFromDob(prev.borrowerDob, value);
+                    if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
                   }
-                  const clamped = clampPercent(Number(clean));
-                  // im Feld ohne % anzeigen (du formatierst Prozente sonst auch „roh“)
-                  e.target.value = String(clamped);
-                  setState(prev => ({ ...prev, closingCostRate: String(clamped) }));
-                }}
-              />
-              {/* Optional: einfache Hinweiszeile */}
-              {/*<p className="text-xs text-muted-foreground">
-                Zwischen 1 % und 100 %. Wird automatisch begrenzt.
-              </p>*/}
-              <Label htmlFor="mortgageRate">Hypothekarzinssatz (%)</Label>
-              <Input
-                id="mortgageRate"
-                placeholder="z. B. 5"
-                defaultValue={state.mortgageRate}
-                onBlur={(e) => {
-                  const clean = e.target.value.replace(/[^0-9.]/g, "");
-                  if (clean === "") {
-                    // leer lassen, wenn nichts eingegeben wurde
-                    setState(prev => ({ ...prev, mortgageRate: "" }));
-                    e.target.value = "";
-                    return;
-                  }
-                  const clamped = clampPercent(Number(clean));
-                  // im Feld ohne % anzeigen (du formatierst Prozente sonst auch „roh“)
-                  e.target.value = String(clamped);
-                  setState(prev => ({ ...prev, mortgageRate: String(clamped) }));
-                }}
-              />
-              {/* Optional: einfache Hinweiszeile */}
-              {/*<p className="text-xs text-muted-foreground">
-                Zwischen 1 % und 100 %. Wird automatisch begrenzt.
-              </p>*/}
-              <Label htmlFor="borrowerDob">Geburtstag Kreditnehmer *</Label>
-              <Input
-                id="borrowerDob"
-                placeholder="dd.mm.yyyy"
-                defaultValue={state.borrowerDob}
-                onBlur={(e) => {
-                  // normalisieren (z.B. 01011990 -> 01.01.1990)
-                  const normalized = normalizeDob(e.target.value);
-                  e.target.value = normalized;
+                  return next;
+                })
+              }
+            >
+              <SelectTrigger id="gender" className={errors.gender ? "border-red-500" : ""}>
+                <SelectValue placeholder="Geschlecht auswählen" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="female">Weiblich</SelectItem>
+                <SelectItem value="male">Männlich</SelectItem>
+              </SelectContent>
+            </Select>
+            {errors.gender && (
+              <p className="text-sm text-red-500">{errors.gender}</p>
+            )}
+          </div>
 
-                  // State setzen
-                  setState(prev => {
+          {/* Reihe 3: Geburtstag & Jahre bis Pension nebeneinander */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="borrowerDob">Geburtstag Kreditnehmer *</Label>
+              <DobCalendarInput
+                id="borrowerDob"
+                value={state.borrowerDob}
+                placeholder="dd.mm.yyyy"
+                // error={!!errors.borrowerDob}
+                // defaultValue={state.borrowerDob}
+                onChange={(normalized) => {
+                  setState((prev) => {
                     const next = { ...prev, borrowerDob: normalized };
+                    // Jahre bis Pension live berechnen
                     if (isValidDob(normalized)) {
-                      const yrs = yearsToRetirementFromDob(
-                        normalized,
-                        prev.gender || "male" // Default: Mann
-                      );
-                      if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
+                      const yrs = yearsToRetirementFromDob(normalized, prev.gender || "male");
+                        if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
                     }
                     return next;
                   });
+                  //Fehler prüfen
                   const errs = getValidationErrors(1);
                   setErrors(errs);
-                }}
-                onFocus={(e) => {
-                  // nichts Besonderes nötig; Nutzer kann direkt tippen
                 }}
                 className={errors.borrowerDob ? "border-red-500" : ""}
               />
               {errors.borrowerDob && (
                 <p className="text-sm text-red-500">{errors.borrowerDob}</p>
               )}
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="yearsToRetirement">Jahre bis Pension *</Label>
               <Input
                 id="yearsToRetirement"
@@ -533,8 +963,6 @@ export default function Index() {
                   }
                   e.target.value = clean;
                   setState(prev => ({ ...prev, yearsToRetirement: clean }));
-
-                  // sofortige Validierung
                   const errs = getValidationErrors(1);
                   setErrors(errs);
                 }}
@@ -543,35 +971,11 @@ export default function Index() {
               {errors.yearsToRetirement && (
                 <p className="text-sm text-red-500">{errors.yearsToRetirement}</p>
               )}
-              <Label htmlFor="gender">Geschlecht *</Label>
-                  <Select
-                    value={state.gender}
-                    onValueChange={(value: "male" | "female" | "diverse") =>
-                          setState(prev => {
-                              const next = { ...prev, gender: value };
-                              if (isValidDob(prev.borrowerDob)) {
-                                const yrs = yearsToRetirementFromDob(prev.borrowerDob, value);
-                                if (!Number.isNaN(yrs)) next.yearsToRetirement = String(yrs);
-                              }
-                              return next;
-                            })
-                    }
-                  >
-                    <SelectTrigger id="gender" className={errors.gender ? "border-red-500" : ""}>
-                      <SelectValue placeholder="Geschlecht auswählen" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="female">Weiblich</SelectItem>
-                      <SelectItem value="male">Männlich</SelectItem>
-                      <SelectItem value="diverse">Divers</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {errors.gender && (
-                    <p className="text-sm text-red-500">{errors.gender}</p>
-                  )}
             </div>
           </div>
-        );
+        </div>
+      );
+
 
       case 2:
         return (
@@ -646,75 +1050,78 @@ export default function Index() {
               })()}
             </div>
 
-            {/* Anlagekosten & Verkehrswert */}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Kaufpreis */}
               <div className="space-y-2">
-                <Label htmlFor="investmentCost">Anlagekosten (CHF) *</Label>
+                <Label htmlFor="purchasePriceCh">Kaufpreis (CHF) *</Label>
                 <Input
-                  id="investmentCost"
-                  placeholder="CHF 1’000’000.00"
+                  id="purchasePriceCh"
+                  placeholder="z.B. 1’000’000"
                   type="text"
-                  defaultValue={displayCHF(state.investmentCost)}
+                  defaultValue={displayCHF(state.purchasePriceCh)}
                   onBlur={(e) => {
                     const clean = cleanCHF(e.target.value);
                     e.target.value = displayCHF(clean);
+
                     setState(prev => {
-                      const next: CalculatorState = { ...prev, investmentCost: clean };
-                      // solange verknüpft, Verkehrswert automatisch nachziehen
-                      if (prev.isMarketLinked) next.marketValue = clean;
+                      const next = { ...prev, purchasePriceCh: clean };
+                      const sum = kaufpreisPlusInvestitionen({ ...next });
+                      // Verkehrswert intern neu setzen (nicht anzeigen)
+                      next.investmentCost = String(sum);
+                      next.marketValue = String(sum);
                       return next;
                     });
                   }}
-                  onFocus={(e) => { if (state.investmentCost) e.target.value = state.investmentCost; }}
-                  className={errors.investmentCost ? "border-red-500" : ""}
+                  onFocus={(e) => { if (state.purchasePriceCh) e.target.value = state.purchasePriceCh; }}
+                  className={errors.purchasePriceCh ? "border-red-500" : ""}
                 />
-                {errors.investmentCost && <p className="text-sm text-red-500">{errors.investmentCost}</p>}
+                {errors.purchasePriceCh && <p className="text-sm text-red-500">{errors.purchasePriceCh}</p>}
               </div>
 
+              {/* Investitionen mit Info-Icon */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="marketValue">Verkehrswert (CHF) *</Label>
-                  {/* kleiner Toggle-Hinweis */}
-                  <span className="text-xs text-muted-foreground">
-                    {state.isMarketLinked ? "∼ folgt Anlagekosten" : "manuell gesetzt"}
-                  </span>
+                  <Label htmlFor="investments">Investitionen (CHF) *</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                        <Info className="h-4 w-4" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-80">
+                      <p className="text-sm">
+                        Gemeint sind wertrelevante Investitionen wie z. B. der Bau eines Swimmingpools,
+                        ein neuer Wintergarten oder eine Sanierung.
+                      </p>
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <Input
-                  id="marketValue"
-                  placeholder="CHF 1’000’000.00"
+                  id="investments"
+                  placeholder="z.B. 100’000"
                   type="text"
-                  defaultValue={displayCHF(state.marketValue || state.investmentCost)}
+                  defaultValue={displayCHF(state.investments)}
                   onBlur={(e) => {
                     const clean = cleanCHF(e.target.value);
                     e.target.value = displayCHF(clean);
-                    setState(prev => ({ ...prev, marketValue: clean || prev.investmentCost, isMarketLinked: false }));
-                  }}
-                  onFocus={(e) => {
-                    const current = state.marketValue || (state.isMarketLinked ? state.investmentCost : "");
-                    if (current) e.target.value = current;
-                  }}
-                  className={errors.marketValue ? "border-red-500" : ""}
-                />
-                {errors.marketValue && <p className="text-sm text-red-500">{errors.marketValue}</p>}
 
-                {/* Optional: Link/Unlink Button */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="mt-1 h-7 px-2 text-xs"
-                  onClick={() => setState(prev => {
-                    const link = !prev.isMarketLinked;
-                    return {
-                      ...prev,
-                      isMarketLinked: link,
-                      marketValue: link ? prev.investmentCost : prev.marketValue
-                    };
-                  })}
-                >
-                  {state.isMarketLinked ? "Verknüpfung lösen" : "Mit Anlagekosten verknüpfen"}
-                </Button>
+                    setState(prev => {
+                      const next = { ...prev, investments: clean };
+                      const sum = kaufpreisPlusInvestitionen({ ...next });
+                      // Verkehrswert intern neu setzen (nicht anzeigen)
+                      next.investmentCost = String(sum);
+                      next.marketValue = String(sum);
+                      return next;
+                    });
+                  }}
+                  onFocus={(e) => { if (state.investments) e.target.value = state.investments; }}
+                  className={errors.investments ? "border-red-500" : ""}
+                />
+                {errors.investments && <p className="text-sm text-red-500">{errors.investments}</p>}
               </div>
             </div>
+
 
             {/* Finanzierungsquellen */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -733,11 +1140,13 @@ export default function Index() {
                   onBlur={commitPw}
                   onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                   disabled={!isOwnerOccupied}
-                  placeholder={isOwnerOccupied ? "z. B. 50'000" : "0"}
+                  placeholder={isOwnerOccupied ? "z.B. 50'000" : "0"}
                 />
+                {/*
                 <p className="text-xs text-muted-foreground">
                   {formatCurrency(Number(state.pensionWithdrawal || "0"))}
                 </p>
+                */}
               </div>
 
               <div className="space-y-2">
@@ -756,16 +1165,18 @@ export default function Index() {
                   disabled={!isOwnerOccupied}
                   placeholder={isOwnerOccupied ? "z. B. 10'000" : "0"}
                 />
+                {/*
                 <p className="text-xs text-muted-foreground">
                   {formatCurrency(Number(state.pillarWithdrawal || "0"))}
                 </p>
+                */}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="cashEquity">Barmittel (CHF)</Label>
                 <Input
                   id="cashEquity"
-                  placeholder="CHF 250’000.00"
+                  placeholder="z.B. CHF 250’000.00"
                   type="text"
                   defaultValue={displayCHF(state.cashEquity)}
                   onBlur={(e) => { const clean = cleanCHF(e.target.value); e.target.value = displayCHF(clean); setState(p => ({...p, cashEquity: clean})); }}
@@ -773,89 +1184,136 @@ export default function Index() {
                 />
               </div>
             </div>
+
+            {/* Nettomiete pro Monat (nur bei vermietet/fremdvermietet) */}
+            {(isRentedType(state.propertyType) || state.usage === "vermietet") && (
+              <div className="mt-4 space-y-2">
+                <Label htmlFor="monthlyNetRent">Nettomiete pro Monat (ohne Nebenkosten) *</Label>
+                <Input
+                  id="monthlyNetRent"
+                  type="text"
+                  placeholder="z. B. 3'000"
+                  defaultValue={displayCHF(state.monthlyNetRent || "")}
+                  onBlur={(e) => {
+                    const clean = cleanCHF(e.target.value);
+                    e.target.value = displayCHF(clean);
+                    setState(prev => ({ ...prev, monthlyNetRent: clean }));
+                  }}
+                  onFocus={(e) => { if (state.monthlyNetRent) e.target.value = state.monthlyNetRent; }}
+                  className={errors.monthlyNetRent ? "border-red-500" : ""}
+                />
+                {errors.monthlyNetRent && <p className="text-sm text-red-500">{errors.monthlyNetRent}</p>}
+              </div>
+            )}
+
+            {/* Neue Reihe: Schuldbriefe & Sicherstellungen */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="mortgageNotes">Schuldbriefe (CHF)</Label>
+                <Input
+                  id="mortgageNotes"
+                  type="text"
+                  placeholder="z. B. 100'000"
+                  defaultValue={displayCHF(state.mortgageNotes)}
+                  onBlur={(e) => {
+                    const clean = cleanCHF(e.target.value);
+                    e.target.value = displayCHF(clean);
+                    // nur Werte > 0 speichern; leere Felder bleiben leer
+                    setState((prev) => ({
+                      ...prev,
+                      mortgageNotes: clean && Number(clean) > 0 ? clean : "",
+                    }));
+                  }}
+                  onFocus={(e) => {
+                    if (state.mortgageNotes) e.target.value = state.mortgageNotes;
+                  }}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="collateral">Sicherstellungen (CHF)</Label>
+                <Input
+                  id="collateral"
+                  type="text"
+                  placeholder="z. B. 50'000"
+                  defaultValue={displayCHF(state.collateral)}
+                  onBlur={(e) => {
+                    const clean = cleanCHF(e.target.value);
+                    e.target.value = displayCHF(clean);
+                    setState((prev) => ({
+                      ...prev,
+                      collateral: clean && Number(clean) > 0 ? clean : "",
+                    }));
+                  }}
+                  onFocus={(e) => {
+                    if (state.collateral) e.target.value = state.collateral;
+                  }}
+                />
+              </div>
+            </div>
           </div>
         );
 
-      case 3:
-        return (
-          <div className="space-y-6">
-            {/* Einkommen nebeneinander */}
+        case 3:
+          return (
+            <div className="space-y-6">
+              {/* Reihe 1: Einkommen */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Einkommen Er */}
-                <div className="space-y-2">
-                  <Label htmlFor="incomeEr">Jahreseinkommen Brutto (m)</Label>
-                  <Input
-                    id="incomeEr"
-                    type="text"
-                    placeholder="CHF 150'000"
-                    defaultValue={displayCHF(state.incomeEr)}
-                    onBlur={(e) => {
-                      const clean = cleanCHF(e.target.value);
-                      e.target.value = displayCHF(clean);
-                      setState(p => ({ ...p, incomeEr: clean }));
-                    }}
-                    onFocus={(e) => { if (state.incomeEr) e.currentTarget.value = state.incomeEr; }}
-                    inputMode="numeric"
-                  />
-                </div>
+                <ChfInputCommit
+                  id="incomeEr"
+                  label="Jahreseinkommen Brutto (M)"
+                  placeholder="z.B. CHF 100'000"
+                  value={state.incomeEr}
+                  onCommit={(digits) => setState((p) => ({ ...p, incomeEr: digits }))}
+                />
+                <ChfInputCommit
+                  id="incomeSie"
+                  label="Jahreseinkommen Brutto (F)"
+                  placeholder="z.B. CHF 100'000"
+                  value={state.incomeSie}
+                  onCommit={(digits) => setState((p) => ({ ...p, incomeSie: digits }))}
+                />
+              </div>
 
-                {/* Einkommen Sie */}
-                <div className="space-y-2">
-                  <Label htmlFor="incomeSie">Jahreseinkommen Brutto (f)</Label>
-                  <Input
-                    id="incomeSie"
-                    type="text"
-                    placeholder="CHF 150'000"
-                    defaultValue={displayCHF(state.incomeSie)}
-                    onBlur={(e) => {
-                      const clean = cleanCHF(e.target.value);
-                      e.target.value = displayCHF(clean);
-                      setState(p => ({ ...p, incomeSie: clean }));
-                    }}
-                    onFocus={(e) => { if (state.incomeSie) e.currentTarget.value = state.incomeSie; }}
-                    inputMode="numeric"
-                  />
-                </div>
+              {errors.incomeTotal && (
+                <p className="text-sm text-red-500 mt-1">{errors.incomeTotal}</p>
+              )}
+
+
+              {/* Nach dem Einkommen-Grid in case 3 einfügen */}
+              <div className="space-y-2">
+                <ChfInputCommit
+                  id="otherPropertiesBurden"
+                  label="Kalk. Belastung weiterer Liegenschaften (jährlich, optional)"
+                  placeholder="z.B. 0 oder 6'000"
+                  value={state.otherPropertiesBurden || ""}
+                  onCommit={(digits) => setState((p) => ({ ...p, otherPropertiesBurden: digits }))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Falls vorhanden: jährliche kalk. Belastung aus weiteren Objekten (CHF/Jahr). 0 ist erlaubt.
+                </p>
               </div>
 
 
-            {/* Weitere Kreditbelastungen */}
-            <div className="space-y-2">
-              <Label htmlFor="otherLoans">Weitere Kreditbelastungen (Leasing / Konsumkredit)</Label>
-              <Input
-                id="otherLoans"
-                type="text"
-                placeholder="CHF 0"
-                defaultValue={displayCHF(state.otherLoans)}
-                onBlur={(e) => {
-                  const clean = cleanCHF(e.target.value);
-                  e.target.value = displayCHF(clean);
-                  setState(p => ({ ...p, otherLoans: clean }));
-                }}
-                onFocus={(e) => { if (state.otherLoans) e.currentTarget.value = state.otherLoans; }}
-                inputMode="numeric"
-              />
+              {/* Reihe 2: Belastungen */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <ChfInputCommit
+                  id="otherLoans"
+                  label="Weitere Kreditbelastungen (Leasing / Konsumkredit)"
+                  placeholder="z.B. 12'000"
+                  value={state.otherLoans}
+                  onCommit={(digits) => setState((p) => ({ ...p, otherLoans: digits }))}
+                />
+                <ChfInputCommit
+                  id="otherHousingCosts"
+                  label="Weitere Belastungen (eigene Wohnkosten)"
+                  placeholder="z.B. 24'000"
+                  value={state.otherHousingCosts}
+                  onCommit={(digits) => setState((p) => ({ ...p, otherHousingCosts: digits }))}
+                />
+              </div>
             </div>
+          );
 
-            {/* Weitere Belastungen */}
-            <div className="space-y-2">
-              <Label htmlFor="otherHousingCosts">Weitere Belastungen (eigene Wohnkosten)</Label>
-              <Input
-                id="otherHousingCosts"
-                type="text"
-                placeholder="CHF 0"
-                defaultValue={displayCHF(state.otherHousingCosts)}
-                onBlur={(e) => {
-                  const clean = cleanCHF(e.target.value);
-                  e.target.value = displayCHF(clean);
-                  setState(p => ({ ...p, otherHousingCosts: clean }));
-                }}
-                onFocus={(e) => { if (state.otherHousingCosts) e.currentTarget.value = state.otherHousingCosts; }}
-                inputMode="numeric"
-              />
-            </div>
-          </div>
-        );
 
       default:
         return null;
@@ -907,14 +1365,14 @@ export default function Index() {
               <Card>
                 <CardHeader>
                   <CardTitle>
-                    {currentStep === 1 && "Kreditdetails"}
-                    {currentStep === 2 && "Einkommen & Ausgaben"}
-                    {currentStep === 3 && "Zusätzliche Informationen"}
+                    {currentStep === 1 && "Personenangaben"}
+                    {currentStep === 2 && "Objekt & Finanzierung"}
+                    {currentStep === 3 && "Tragbarkeit & weitere Angaben"}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <StepContent />
-                  
+
                   <div className="flex justify-between mt-8">
                     <Button
                       variant="outline"
@@ -924,11 +1382,12 @@ export default function Index() {
                       Zurück
                     </Button>
                     <Button
-                      onClick={nextStep}
-                      disabled={currentStep === 3 || !isStepValid(currentStep)}
+                      onClick={currentStep === 3 ? finish : nextStep}
+                      disabled={!isStepValid(currentStep)}
                     >
                       {currentStep === 3 ? "Abschliessen" : "Weiter"}
                     </Button>
+
                   </div>
                 </CardContent>
               </Card>
