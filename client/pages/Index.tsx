@@ -72,9 +72,7 @@ const defaultState: CalculatorState = {
 };
 
 //Helper formatierungen
-//const clampPercent = (n: number) => Math.min(100, Math.max(1, n || 0));
-const isRentedType = (label: string) =>
-  (label || "").toLowerCase().includes("fremdvermietet") || (label || "").toLowerCase() === "vermietet";
+const isRentedUsage = (usage: string) => (usage || "").toLowerCase() === "vermietet";
 
 const kaufpreisPlusInvestitionen = (s: CalculatorState) =>
   parseNumber(s.purchasePriceCh || "0") + parseNumber(s.investments || "0");
@@ -305,15 +303,22 @@ export default function Index() {
 
 
   // Calculate derived values
-  const mortgageThresholds: Record<string, { first: number; second: number }> = {
-    "Mehrfamilienhaus fremdvermietet": { first: 0.6, second: 0.75 },
-    "Einfamilienhaus selbstgenutzt":    { first: 2/3, second: 0.80 },
-    "Stockwerkeigentum selbstgenutzt":  { first: 2/3, second: 0.80 },
-    "Ferienobjekt / Luxus":             { first: 0.50, second: 0.60 },
-    "Bauland":                          { first: 0.50, second: 0.00 },
-    "Einfamilienhaus fremdvermietet":   { first: 2/3, second: 0.75 },
-    "Stockwerkeigentum fremdvermietet": { first: 2/3, second: 0.75 },
-  };
+type PT = "Einfamilienhaus" | "Wohnung";
+type US = "eigennutzung" | "vermietet" | "zweitnutzung";
+
+function thresholdsFor(pt: string, usage: string) {
+  const p = (pt || "").toLowerCase();
+  const u = (usage || "").toLowerCase() as US;
+
+  // Standard-Schwellen nach (Art, Nutzung)
+  if (u === "eigennutzung")   return { first: 2/3, second: 0.80 }; // 66.7% / 80%
+  if (u === "vermietet")      return { first: 2/3, second: 0.75 }; // 66.7% / 75%
+  if (u === "zweitnutzung")   return { first: 0.50, second: 0.60 }; // 50% / 60% (analog Ferienobjekt)
+  return { first: 0, second: 0 };
+}
+
+const firstMortgagePercent = () => thresholdsFor(state.propertyType, state.usage).first;
+const secondMortgagePercent = () => thresholdsFor(state.propertyType, state.usage).second;
 
   const calculations = {
     newFinancing: () => {
@@ -340,82 +345,63 @@ export default function Index() {
       if (nf <= 0 || invest <= 0) return 0;
       return (calculations.basisNettoBelehnung() / invest) * 100; // Prozentwert
     },
-    firstMortgagePercent: () => {
-      return mortgageThresholds[state.propertyType]?.first ?? 0;
-    },
+    firstMortgagePercent: () => firstMortgagePercent(),
+
     firstMortgageAbsolute: () => {
-      const invest     = parseNumber(state.investmentCost || "0");          // Anlagekosten
-      const newFin     = calculations.newFinancing();                       // Neue Finanzierung
-      const firstPct   = mortgageThresholds[state.propertyType]?.first ?? 0; // Quote für 1. Hypothek (z. B. 0.75)
-      const collateral = parseNumber(state.collateral || "0");              // Sicherstellungen (CHF)
-
+      const invest     = parseNumber(state.investmentCost || "0");
+      const newFin     = calculations.newFinancing();
+      const firstPct   = firstMortgagePercent();
+      const collateral = parseNumber(state.collateral || "0");
       if (invest <= 0) return 0;
-
-      // Maximale 1. Hypothek nach Richtwerten (Anlagekosten × Quote + Sicherstellungen)
       const maxFirst = invest * firstPct + collateral;
-      // Tatsächliche 1. Hypothek darf die neue Finanzierung nicht übersteigen
       return Math.min(newFin, maxFirst);
     },
-    secondMortgagePercent: () => {
-      return mortgageThresholds[state.propertyType]?.second ?? 0;
-    },
+    secondMortgagePercent: () => secondMortgagePercent(),
     secondMortgageAbsolute: () => {
       const newFin  = calculations.newFinancing();
       const firstAbs = calculations.firstMortgageAbsolute();
-      // Restbetrag ist 2. Hypothek
       return Math.max(0, newFin - firstAbs);
     },
     amortizationYears: () => {
-      switch (state.propertyType) {
-        case "Einfamilienhaus selbstgenutzt":
-        case "Stockwerkeigentum selbstgenutzt":
-          const yrs = Number(state.yearsToRetirement || "0");
-          return Math.max(1, Math.min(yrs, 15));
-        case "Einfamilienhaus fremdvermietet":
-        case "Stockwerkeigentum fremdvermietet":
-          return 10;
-        case "Bauland":
-          return 1;
-        default:
-          return 0; // für Ferienobjekt/Luxus und Mehrfamilienhaus nicht gebraucht
+      // Jahre werden nur für Eigennutzung und Vermietet verwendet
+      const u = state.usage;
+      if (u === "eigennutzung") {
+        const yrs = Number(state.yearsToRetirement || "0");
+        return Math.max(1, Math.min(yrs, 15));
       }
+      if (u === "vermietet") {
+        return 10;
+      }
+      // Zweitnutzung: kein Jahreplan, da 1% p.a.-Regel (siehe amortizationInfo)
+      return 0;
     },
 
     amortizationInfo: () => {
-      const basisNet  = calculations.basisNettoBelehnung();      // Neue Finanzierung minus Sicherheiten
+      const basisNet  = calculations.basisNettoBelehnung();
       const invest    = parseNumber(state.investmentCost || "0");
       const netRatio  = invest > 0 ? basisNet / invest : 0;
-      const firstPct  = calculations.firstMortgagePercent();
+      const { first: firstPct } = thresholdsFor(state.propertyType, state.usage);
       const secondAbs = calculations.secondMortgageAbsolute();
       const years     = calculations.amortizationYears();
-
-      let rule, annual;
-
-      if (state.propertyType === "Mehrfamilienhaus fremdvermietet") {
+      const u         = state.usage;
+    
+      let rule = "-", annual = 0;
+    
+      if (u === "zweitnutzung") {
+        // analog bisher "Ferienobjekt / Luxus"
         if (netRatio <= firstPct) {
-          // keine zweite Hypothek → keine Amortisation
           rule = "keine Amortisation";
           annual = 0;
         } else {
-          const byPercent = basisNet * 0.01;
-          const byTen     = secondAbs / 10;
-          annual = Math.max(byPercent, byTen);
-          rule   = "10 Jahre, mindestens 1 %";
-        }
-      } else if (state.propertyType === "Ferienobjekt / Luxus") {
-        if (netRatio <= firstPct) {
-          rule   = "keine Amortisation";
-          annual = 0;
-        } else {
-          annual = basisNet * 0.01;
-          rule   = "1 % p.a.";
+          annual = basisNet * 0.01; // 1% p.a. auf Basis Nettobelehnung
+          rule   = "1% p.a.";
         }
       } else {
-        // alle anderen Objektarten: 2. Hypothek / Amortisationsjahre
+        // Eigennutzung / Vermietet
         annual = years > 0 ? secondAbs / years : 0;
-        rule   = years > 0 ? `${years} Jahr${years > 1 ? "e" : ""}` : "-";
+        rule   = years > 0 ? `${years} Jahr${years > 1 ? "e" : ""}` : "-";
       }
-
+    
       return { rule, annual };
     },
 
@@ -434,10 +420,10 @@ export default function Index() {
       return amort + zins + nk;
     },
     annualNetRent: () => {
-      const rented = isRentedType(state.propertyType) || state.usage === "vermietet";
       const monthly = parseNumber(state.monthlyNetRent || "0");
-      return rented && monthly > 0 ? monthly * 12 : 0;
+      return isRentedUsage(state.usage) && monthly > 0 ? monthly * 12 : 0;
     },
+    
 
     kalkBelastung: () => {
       const total = calculations.totalKalkulatorischeNebenkosten(); // Summe aus Amortisation + kalk. Zins + kalk. Nebenkosten
@@ -510,11 +496,11 @@ export default function Index() {
           }
 
           // Fremdvermietung → Nettomiete erforderlich
-          const rented = isRentedType(state.propertyType) || state.usage === "vermietet";
-          if (rented) {
-            const rent = parseNumber(state.monthlyNetRent || "0");
-            if (!rent || rent <= 0) newErrors.monthlyNetRent = "Nettomiete ist erforderlich und muss > 0 sein";
-          }
+          const rented = isRentedUsage(state.usage);
+            if (rented) {
+              const rent = parseNumber(state.monthlyNetRent || "0");
+              if (!rent || rent <= 0) newErrors.monthlyNetRent = "Nettomiete ist erforderlich und muss > 0 sein";
+            }
           break;
         }
         case 3: {
@@ -641,36 +627,110 @@ export default function Index() {
     );
   }
 
-  function TragbarkeitGauge({ value }: { value: number }) {
-    const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
-    return (
-      <div className="flex justify-center">
-      <ReactSpeedometer
-        minValue={0}
-        maxValue={100}
-        value={v}
-        width={380}                    // a bit larger to avoid clipping
-        height={230}
-        ringWidth={26}
-        needleHeightRatio={0.78}
-        needleColor="#0f172a"
-        textColor="#0f172a"
-        valueTextFontSize="16"
-        currentValueText={`${v.toFixed(1)}%`} // centered under the peak
-        customSegmentStops={[0, 30, 33, 100]}                 // green / yellow / red
-        segmentColors={["#10b981", "#f59e0b", "#ef4444"]}
-        maxSegmentLabels={0}                                   // hide default 0/50/100 ticks
-        labelFontSize="10"                                     // (kept small if you re-enable ticks)
-        customSegmentLabels={[
-          { text: "≤30%", color: "#0f172a", fontSize: "10" },
-          { text: "30%–33%", color: "#0f172a", fontSize: "10" },
-          { text: ">33%-100%", color: "#0f172a", fontSize: "10" },
-        ]}
-        needleTransitionDuration={500}
-      />
+  //Für Gradienten Speedometer
+  // ---------- Konfiguration ----------
+  // --- simple constants you can tweak ---
+  
+const GAUGE_WIDTH = 380;
+const GAUGE_HEIGHT = 230;
+const GAUGE_RING = 26;
+
+// Mitte des Markers so, dass die Nadel bei 33.3% genau mittig darüber liegt:
+const MARKER_CENTER = 33.33;     // <- hier liegt die Mitte des schwarzen Keils
+const MARKER_WIDTH  = 1.0;       // Gesamtbreite in %-Punkten (0.6–1.2 üblich)
+
+// -------- helpers --------
+function lerpColor(from: string, to: string, t: number) {
+  const f = from.replace('#',''), g = to.replace('#','');
+  const fr = parseInt(f.slice(0,2),16), fg = parseInt(f.slice(2,4),16), fb = parseInt(f.slice(4,6),16);
+  const tr = parseInt(g.slice(0,2),16), tg = parseInt(g.slice(2,4),16), tb = parseInt(g.slice(4,6),16);
+  const rr = Math.round(fr + (tr - fr) * t);
+  const rg = Math.round(fg + (tg - fg) * t);
+  const rb = Math.round(fb + (tb - fb) * t);
+  return `#${rr.toString(16).padStart(2,'0')}${rg.toString(16).padStart(2,'0')}${rb.toString(16).padStart(2,'0')}`;
+}
+
+// 0..(center-width/2) = grün→gelb, (center±width/2) = schwarzer Keil, (center+width/2)..100 = hellrot→dunkelrot
+function buildStopsAndColorsCentered(center = MARKER_CENTER, width = MARKER_WIDTH, lowSteps = 120, highSteps = 180) {
+  const green = "#10b981", yellow = "#f59e0b", redLight = "#f87171", redDark = "#991b1b";
+
+  const half = width / 2;
+  const lower = Math.max(0, center - half);
+  const upper = Math.min(100, center + half);
+
+  // 0..lower
+  const lowStops  = Array.from({ length: lowSteps + 1 }, (_, i) => lower * (i / lowSteps));
+  // upper..100
+  const highStops = Array.from({ length: highSteps + 1 }, (_, i) => upper + (100 - upper) * (i / highSteps));
+  // final stop list: [0..lower], [lower..upper] (schwarz), [upper..100]
+  const stops = [...lowStops, upper, ...highStops.slice(1)];
+
+  const lowColors  = Array.from({ length: lowSteps },  (_, i) => lerpColor(green, yellow, lowSteps === 1 ? 0 : i / (lowSteps - 1)));
+  const highColors = Array.from({ length: highSteps }, (_, i) => lerpColor(redLight, redDark,  highSteps === 1 ? 0 : i / (highSteps - 1)));
+  const colors = [...lowColors, "#000000", ...highColors];
+
+  return { stops, colors };
+}
+
+// Nur Label (kein Linien-Overlay!)
+function ThresholdLabel({
+  width = GAUGE_WIDTH,
+  height = GAUGE_HEIGHT,
+  ringWidth = GAUGE_RING,
+  at = MARKER_CENTER,
+  text = "33%",
+  margin = 65,
+}: {
+  width?: number; height?: number; ringWidth?: number; at?: number; text?: string; margin?: number;
+}) {
+  const cx = width / 2;
+  const cy = height - margin;
+  const outerR = Math.min(cx, cy) - margin;
+  const r = outerR - ringWidth / 2;
+  const angle = -Math.PI + (Math.PI * Math.max(0, Math.min(100, at)) / 100);
+  const x = cx + r * Math.cos(angle);
+  const y = cy + r * Math.sin(angle) - 10;
+  return (
+    <svg width={width} height={height} className="pointer-events-none absolute inset-0" style={{ left: 0, top: 0, zIndex: 10 }}>
+      <text x={x} y={y} textAnchor="middle" fontSize="11" stroke="#fff" strokeWidth={3} paintOrder="stroke" fill="#111827" fontWeight={600}>
+        {text}
+      </text>
+    </svg>
+  );
+}
+
+// -------- usage --------
+function TragbarkeitGauge({ value }: { value: number }) {
+  const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+  const { stops, colors } = buildStopsAndColorsCentered(); // zentriert um 33.33%
+
+  return (
+    <div className="flex justify-center">
+      <div className="relative" style={{ width: GAUGE_WIDTH, height: GAUGE_HEIGHT }}>
+        <ReactSpeedometer
+          minValue={0}
+          maxValue={100}
+          value={v}
+          width={GAUGE_WIDTH}
+          height={GAUGE_HEIGHT}
+          ringWidth={GAUGE_RING}
+          needleHeightRatio={0.78}
+          needleColor="#0f172a"
+          textColor="#0f172a"
+          valueTextFontSize="16"
+          currentValueText={`${v.toFixed(1)}%`}
+          customSegmentStops={stops}
+          segmentColors={colors}
+          maxSegmentLabels={0}
+          needleTransitionDuration={500}
+          forceRender
+        />
+        <ThresholdLabel text="33%" />
+      </div>
     </div>
-    );
-  }
+  );
+}
+
 
 
 
@@ -740,13 +800,17 @@ export default function Index() {
                     {(calculations.secondMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.secondMortgageAbsolute())}
                   </p>
                   <p className="text-sm">
-                    <strong>Amortisation:</strong> {calculations.amortizationInfo().rule}
+                    <strong>Amortisation (Jahre):</strong> {calculations.amortizationInfo().rule}
                   </p>
                   <p className="text-sm">
-                    <strong>Kalk. Zins (5%):</strong> {formatCurrency(calculations.kalkulatorischerZins())}
+                    <strong>Kalk. Amortisation:</strong>{" "}
+                    {formatCurrency(calculations.secondMortgageAbsolute() / calculations.amortizationYears() || 0)}
                   </p>
                   <p className="text-sm">
-                    <strong>Kalk. Nebenkosten (1%):</strong> {formatCurrency(calculations.kalkulatorischeNebenkosten())}
+                    <strong>Kalk. Zins:</strong> {formatCurrency(calculations.kalkulatorischerZins())}
+                  </p>
+                  <p className="text-sm">
+                    <strong>Kalk. Nebenkosten:</strong> {formatCurrency(calculations.kalkulatorischeNebenkosten())}
                   </p>
                   <p className="text-sm">
                     <strong>Jährliche Nettomiete:</strong> {formatCurrency(calculations.annualNetRent())}
@@ -815,6 +879,10 @@ export default function Index() {
                     </p>
                     <p className="text-sm">
                       <strong>Amortisation:</strong> {calculations.amortizationInfo().rule}
+                    </p>
+                    <p className="text-sm">
+                      <strong>Kalk. Amortisation:</strong>{" "}
+                      {formatCurrency(calculations.secondMortgageAbsolute() / calculations.amortizationYears() || 0)}
                     </p>
                     <p className="text-sm">
                       <strong>Kalk. Zins:</strong> {formatCurrency(calculations.kalkulatorischerZins())}
@@ -985,28 +1053,14 @@ export default function Index() {
               <Label htmlFor="propertyType">Art *</Label>
               <Select
                 value={state.propertyType}
-                onValueChange={(label) => {
-                  const forced = forcedUsageFromType(label);
-                  setState(prev => ({
-                    ...prev,
-                    propertyType: label,
-                    // falls Art eine Nutzung erzwingt, gleich mitsetzen,
-                    // sonst bisherige Nutzung beibehalten
-                    usage: forced ?? prev.usage,
-                  }));
-                }}
+                onValueChange={(label) => setState(prev => ({ ...prev, propertyType: label }))}
               >
                 <SelectTrigger className={errors.propertyType ? "border-red-500" : ""}>
                   <SelectValue placeholder="Art auswählen" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Mehrfamilienhaus fremdvermietet">Mehrfamilienhaus fremdvermietet</SelectItem>
-                  <SelectItem value="Einfamilienhaus selbstgenutzt">Einfamilienhaus selbstgenutzt</SelectItem>
-                  <SelectItem value="Stockwerkeigentum selbstgenutzt">Stockwerkeigentum selbstgenutzt</SelectItem>
-                  <SelectItem value="Ferienobjekt / Luxus">Ferienobjekt / Luxus</SelectItem>
-                  <SelectItem value="Bauland">Bauland</SelectItem>
-                  <SelectItem value="Einfamilienhaus fremdvermietet">Einfamilienhaus fremdvermietet</SelectItem>
-                  <SelectItem value="Stockwerkeigentum fremdvermietet">Stockwerkeigentum fremdvermietet</SelectItem>
+                  <SelectItem value="Einfamilienhaus">Einfamilienhaus</SelectItem>
+                  <SelectItem value="Wohnung">Wohnung</SelectItem>
                 </SelectContent>
               </Select>
               {errors.propertyType && <p className="text-sm text-red-500">{errors.propertyType}</p>}
@@ -1015,39 +1069,20 @@ export default function Index() {
             {/* Nutzung */}
             <div className="space-y-2">
               <Label htmlFor="usage">Nutzung *</Label>
-              {(() => {
-                const forced = forcedUsageFromType(state.propertyType);
-                const value = forced ?? state.usage;
-                const disabled = Boolean(forced);
-
-                return (
-                  <>
-                    <Select
-                      value={value}
-                      onValueChange={(v) => {
-                        // nur erlauben, wenn NICHT erzwungen
-                        if (!disabled) setState(prev => ({ ...prev, usage: v }));
-                      }}
-                      disabled={disabled}
-                    >
-                      <SelectTrigger className={errors.usage ? "border-red-500" : ""}>
-                        <SelectValue placeholder="Nutzung auswählen" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="eigennutzung">Eigennutzung</SelectItem>
-                        <SelectItem value="vermietet">Vermietet</SelectItem>
-                        <SelectItem value="zweitnutzung">Zweitnutzung</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {disabled && (
-                      <p className="text-xs text-muted-foreground">
-                        Nutzung durch Art vorgegeben: {value === "eigennutzung" ? "Eigennutzung" : "Vermietet"}.
-                      </p>
-                    )}
-                    {errors.usage && <p className="text-sm text-red-500">{errors.usage}</p>}
-                  </>
-                );
-              })()}
+              <Select
+                value={state.usage}
+                onValueChange={(v) => setState(prev => ({ ...prev, usage: v }))}
+              >
+                <SelectTrigger className={errors.usage ? "border-red-500" : ""}>
+                  <SelectValue placeholder="Nutzung auswählen" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="eigennutzung">Eigennutzung</SelectItem>
+                  <SelectItem value="vermietet">Vermietet</SelectItem>
+                  <SelectItem value="zweitnutzung">Zweitnutzung</SelectItem>
+                </SelectContent>
+              </Select>
+              {errors.usage && <p className="text-sm text-red-500">{errors.usage}</p>}
             </div>
 
 
@@ -1186,7 +1221,7 @@ export default function Index() {
             </div>
 
             {/* Nettomiete pro Monat (nur bei vermietet/fremdvermietet) */}
-            {(isRentedType(state.propertyType) || state.usage === "vermietet") && (
+            {(isRentedUsage(state.propertyType) || state.usage === "vermietet") && (
               <div className="mt-4 space-y-2">
                 <Label htmlFor="monthlyNetRent">Nettomiete pro Monat (ohne Nebenkosten) *</Label>
                 <Input
