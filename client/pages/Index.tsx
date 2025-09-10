@@ -1370,6 +1370,23 @@ function BelehnungsGauge({ value }: { value: number }) {
                   onCommit={(digits) => setState((p) => ({ ...p, otherHousingCosts: digits }))}
                 />
               </div>
+
+              {/* Ergebnis-Meldung Hypothekenfähigkeit */}
+              {(() => {
+                const tragbarkeit = calculations.tragbarkeitPct();
+                const belehnung = calculations.netLeverageRatio();
+                if (!Number.isFinite(tragbarkeit) || !Number.isFinite(belehnung)) return null;
+
+                const ok = tragbarkeit <= 33 && belehnung <= 80;
+                return (
+                  <div className={`mt-6 text-center font-semibold ${ok ? "text-green-600" : "text-red-600"}`}>
+                    {ok
+                      ? "Glückwunsch! Sie können eine Hypothek beantragen"
+                      : "Leider erfüllen Sie nicht die Voraussetzungen für eine Hypothek"}
+                  </div>
+                );
+              })()}
+
             </div>
           );
 
