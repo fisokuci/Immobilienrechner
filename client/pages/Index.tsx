@@ -1317,6 +1317,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
 
 
               {/* Nach dem Einkommen-Grid in case 3 einfügen */}
+              {/*
               <div className="space-y-2">
                 <ChfInputCommit
                   id="otherPropertiesBurden"
@@ -1329,6 +1330,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
                   Falls vorhanden: jährliche kalk. Belastung aus weiteren Objekten (CHF/Jahr). 0 ist erlaubt.
                 </p>
               </div>
+              */}
 
 
               {/* Reihe 2: Belastungen */}
