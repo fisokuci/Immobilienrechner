@@ -705,7 +705,7 @@ function ThresholdLabelBelehnung({
   ringWidth = GAUGE_RING,
   at = 80,
   text = "80%",
-  margin = 58, // << enger, damit Zahl näher an der dicken, schwarzen 80%-Linie liegt
+  margin = 53, // << enger, damit Zahl näher an der dicken, schwarzen 80%-Linie liegt
 }: {
   width?: number; height?: number; ringWidth?: number; at?: number; text?: string; margin?: number;
 }) {
@@ -784,7 +784,7 @@ function BelehnungsGauge({ value }: { value: number }) {
           needleTransitionDuration={500}
           forceRender
         />
-        <ThresholdLabelBelehnung text="80%" at={80} />
+        <ThresholdLabelBelehnung text="80%" at={91} />
       </div>
     </div>
   );
