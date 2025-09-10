@@ -1208,7 +1208,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="cashEquity">Barmittel (CHF)</Label>
+                <Label htmlFor="cashEquity">Barmittel (z.B. Ersparnisse, Schenkungen etc.) (CHF)</Label>
                 <Input
                   id="cashEquity"
                   placeholder="z.B. CHF 250’000.00"
@@ -1267,7 +1267,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
               </div>
               */}
               <div className="space-y-2">
-                <Label htmlFor="collateral">Sicherstellungen (CHF)</Label>
+                <Label htmlFor="collateral">Sicherstellungen (z.B. Säule 3a, LVP 3a, Depot etc.) (CHF)</Label>
                 <Input
                   id="collateral"
                   type="text"
