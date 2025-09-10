@@ -699,6 +699,32 @@ function ThresholdLabel({
   );
 }
 
+function ThresholdLabelBelehnung({
+  width = GAUGE_WIDTH,
+  height = GAUGE_HEIGHT,
+  ringWidth = GAUGE_RING,
+  at = 80,
+  text = "80%",
+  margin = 58, // << enger, damit Zahl näher an der dicken, schwarzen 80%-Linie liegt
+}: {
+  width?: number; height?: number; ringWidth?: number; at?: number; text?: string; margin?: number;
+}) {
+  const cx = width / 2;
+  const cy = height - margin;
+  const outerR = Math.min(cx, cy) - margin;
+  const r = outerR - ringWidth / 2;
+  const angle = -Math.PI + (Math.PI * Math.max(0, Math.min(100, at)) / 100);
+  const x = cx + r * Math.cos(angle);
+  const y = cy + r * Math.sin(angle) - 10;
+  return (
+    <svg width={width} height={height} className="pointer-events-none absolute inset-0" style={{ left: 0, top: 0, zIndex: 10 }}>
+      <text x={x} y={y} textAnchor="middle" fontSize="11" stroke="#fff" strokeWidth={3} paintOrder="stroke" fill="#111827" fontWeight={600}>
+        {text}
+      </text>
+    </svg>
+  );
+}
+
 // -------- usage --------
 function TragbarkeitGauge({ value }: { value: number }) {
   const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
@@ -758,7 +784,7 @@ function BelehnungsGauge({ value }: { value: number }) {
           needleTransitionDuration={500}
           forceRender
         />
-        <ThresholdLabel text="80%" at={90} />
+        <ThresholdLabelBelehnung text="80%" at={80} />
       </div>
     </div>
   );
