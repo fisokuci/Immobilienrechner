@@ -731,6 +731,40 @@ function TragbarkeitGauge({ value }: { value: number }) {
   );
 }
 
+function BelehnungsGauge({ value }: { value: number }) {
+  const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+
+  // 0..80: grün -> orange, 80..100: hellrot -> dunkelrot, schmaler schwarzer Marker bei 80%
+  const { stops, colors } = buildStopsAndColorsCentered(80, 1.0, 160, 160);
+
+  return (
+    <div className="flex justify-center">
+      <div className="relative" style={{ width: GAUGE_WIDTH, height: GAUGE_HEIGHT }}>
+        <ReactSpeedometer
+          minValue={0}
+          maxValue={100}
+          value={v}
+          width={GAUGE_WIDTH}
+          height={GAUGE_HEIGHT}
+          ringWidth={GAUGE_RING}
+          needleHeightRatio={0.78}
+          needleColor="#0f172a"
+          textColor="#0f172a"
+          valueTextFontSize="16"
+          currentValueText={`${v.toFixed(1)}%`}
+          customSegmentStops={stops}
+          segmentColors={colors}
+          maxSegmentLabels={0}
+          needleTransitionDuration={500}
+          forceRender
+        />
+        <ThresholdLabel text="80%" at={90} />
+      </div>
+    </div>
+  );
+}
+
+
 
 
 
@@ -764,26 +798,12 @@ function TragbarkeitGauge({ value }: { value: number }) {
         {/* Erhöhung Schuldbriefe & Basis Nettobelehnung */}
         {state.investmentCost && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <InfoCard
+            {/*/<InfoCard
               title="Erhöhung Schuldbriefe"
               value={formatCurrency(calculations.erhoehungSchuldbriefe())}
               detail="Neue Finanzierung minus Schuldbriefe (min. 0)"
               icon={DollarSign}
-            />
-            <InfoCard
-              title="Basis Nettobelehnung"
-              value={formatCurrency(calculations.basisNettoBelehnung())}
-              detail="Neue Finanzierung minus Sicherstellungen"
-              icon={DollarSign}
-              className="bg-green-50"
-            />
-          </div>
-        )}
-
-        {/* Details + Total Einkommen: nebeneinander ODER untereinander */}
-        {sideBySide ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Details */}
+            />*/}
             <InfoCard
               title="Details"
               value="–"
@@ -834,11 +854,26 @@ function TragbarkeitGauge({ value }: { value: number }) {
                 </>
               }
             />
+            <InfoCard
+              title="Basis Nettobelehnung"
+              value={formatCurrency(calculations.basisNettoBelehnung())}
+              detail="Neue Finanzierung minus Sicherstellungen"
+              icon={DollarSign}
+              className="bg-green-50"
+            />
+          </div>
+        )}
+
+        {/* Details + Total Einkommen: nebeneinander ODER untereinander */}
+        {sideBySide ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Details */}
+            
 
             {/* Total Einkommen (nach kalk. Kosten) */}
-            {showTotalIncomeCard && (
+            {/*{showTotalIncomeCard && (
               <InfoCard
-                title="Einkommen (nach kalk. Kosten)"
+                title="Nettoeinkommen"
                 value={formatCurrency(calculations.totalIncomeAfterCalcCosts())}
                 icon={DollarSign}
                 detail={
@@ -856,66 +891,15 @@ function TragbarkeitGauge({ value }: { value: number }) {
                   </>
                 }
               />
-            )}
+            )}*/}
           </div>
         ) : (
           <>
             {/* Details (untereinander-Variante) */}
-            {state.investmentCost && state.propertyType && (
-              <InfoCard
-                title="Details"
-                value="–"
-                icon={Calculator}
-                detail={
-                  <>
-                    <p className="text-sm"><strong>Nettobelehnung:</strong> {calculations.netLeverageRatio().toFixed(2)}%</p>
-                    <p className="text-sm">
-                      <strong>1. Hypothek (% | CHF):</strong>{" "}
-                      {(calculations.firstMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.firstMortgageAbsolute())}
-                    </p>
-                    <p className="text-sm">
-                      <strong>2. Hypothek (% | CHF):</strong>{" "}
-                      {(calculations.secondMortgagePercent() * 100).toFixed(2)}% | {formatCurrency(calculations.secondMortgageAbsolute())}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Amortisation:</strong> {calculations.amortizationInfo().rule}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Kalk. Amortisation:</strong>{" "}
-                      {formatCurrency(calculations.secondMortgageAbsolute() / calculations.amortizationYears() || 0)}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Kalk. Zins:</strong> {formatCurrency(calculations.kalkulatorischerZins())}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Kalk. Nebenkosten:</strong> {formatCurrency(calculations.kalkulatorischeNebenkosten())}
-                    </p>
-                    <p className="text-sm">
-                      <strong>Jährliche Nettomiete:</strong> {formatCurrency(calculations.annualNetRent())}
-                    </p>
-
-                    {/* Totals */}
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="rounded-lg border px-3 py-2 bg-slate-50">
-                        <p className="text-xs uppercase tracking-wide text-slate-600">Kalk. Kosten</p>
-                        <div className="text-base font-bold">
-                          {formatCurrency(calculations.totalKalkulatorischeNebenkosten())}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border px-3 py-2 bg-amber-50">
-                        <p className="text-xs uppercase tracking-wide text-slate-700">Kalk. Belastung</p>
-                        <div className="text-base font-bold">
-                          {formatCurrency(calculations.kalkBelastung())}
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                }
-              />
-            )}
+            
 
             {/* Total Einkommen (untereinander-Variante) */}
-            {showTotalIncomeCard && (
+            {/*{showTotalIncomeCard && (
               <InfoCard
                 title="Total Einkommen (nach kalk. Kosten)"
                 value={formatCurrency(calculations.totalIncomeAfterCalcCosts())}
@@ -935,7 +919,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
                   </>
                 }
               />
-            )}
+            )}*/}
           </>
         )}
 
@@ -948,6 +932,16 @@ function TragbarkeitGauge({ value }: { value: number }) {
             </div>
           </div>
         )}
+        {/* Nettobelehnung Speedometer */}
+        {state.investmentCost && (
+          <div className="mt-6">
+            <h3 className="text-base font-semibold text-center">Nettobelehnung</h3>
+            <div className="flex justify-center">
+              <BelehnungsGauge value={calculations.netLeverageRatio()} />
+            </div>
+          </div>
+        )}
+
       </div>
     );
   };
