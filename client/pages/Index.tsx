@@ -304,7 +304,7 @@ export default function Index() {
 
   // Calculate derived values
 type PT = "Einfamilienhaus" | "Wohnung";
-type US = "eigennutzung" | "vermietet" | "zweitnutzung";
+type US = "eigennutzung" | "vermietet" ;
 
 function thresholdsFor(pt: string, usage: string) {
   const p = (pt || "").toLowerCase();
@@ -313,7 +313,7 @@ function thresholdsFor(pt: string, usage: string) {
   // Standard-Schwellen nach (Art, Nutzung)
   if (u === "eigennutzung")   return { first: 2/3, second: 0.80 }; // 66.7% / 80%
   if (u === "vermietet")      return { first: 2/3, second: 0.75 }; // 66.7% / 75%
-  if (u === "zweitnutzung")   return { first: 0.50, second: 0.60 }; // 50% / 60% (analog Ferienobjekt)
+  //if (u === "zweitnutzung")   return { first: 0.50, second: 0.60 }; // 50% / 60% (analog Ferienobjekt)
   return { first: 0, second: 0 };
 }
 
@@ -1079,7 +1079,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
                 <SelectContent>
                   <SelectItem value="eigennutzung">Eigennutzung</SelectItem>
                   <SelectItem value="vermietet">Vermietet</SelectItem>
-                  <SelectItem value="zweitnutzung">Zweitnutzung</SelectItem>
+                  {/*<SelectItem value="zweitnutzung">Zweitnutzung</SelectItem>*/}
                 </SelectContent>
               </Select>
               {errors.usage && <p className="text-sm text-red-500">{errors.usage}</p>}
@@ -1243,6 +1243,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
 
             {/* Neue Reihe: Schuldbriefe & Sicherstellungen */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/*
               <div className="space-y-2">
                 <Label htmlFor="mortgageNotes">Schuldbriefe (CHF)</Label>
                 <Input
@@ -1264,6 +1265,7 @@ function TragbarkeitGauge({ value }: { value: number }) {
                   }}
                 />
               </div>
+              */}
               <div className="space-y-2">
                 <Label htmlFor="collateral">Sicherstellungen (CHF)</Label>
                 <Input
