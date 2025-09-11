@@ -218,6 +218,7 @@ export default function Index() {
   const [comparisRates, setComparisRates] = useState<Record<string, number> | null>(null);
   const [comparisLoading, setComparisLoading] = useState(false);
   const [comparisError, setComparisError] = useState<string | null>(null);
+  const [comparisIsFallback, setComparisIsFallback] = useState(false);
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -237,38 +238,55 @@ export default function Index() {
     localStorage.setItem('mortgageCalculator', JSON.stringify(state));
   }, [state]);
 
-  // Fetch Comparis rates on first load
+  // Helper to fetch live Comparis rates with graceful fallback
+  const refreshComparisRates = async () => {
+    setComparisLoading(true);
+    setComparisError(null);
+    setComparisIsFallback(false);
+    try {
+      const resp = await fetch('/api/comparis/interest-rates');
+      let json: any = null;
+      try { json = await resp.json(); } catch {}
+      if (!resp.ok) {
+        const msg = (json && (json.error || json.message)) ? (json.error || json.message) : `HTTP ${resp.status}`;
+        throw new Error(msg);
+      }
+      setComparisRates(json?.data ?? null);
+      setComparisIsFallback(false);
+    } catch (err: any) {
+      // fallback so UI never looks empty
+      console.warn('Falling back to static Comparis rates:', err);
+      setComparisError(String(err?.message || err));
+      setComparisRates(comparisFallbackRates);
+      setComparisIsFallback(true);
+    } finally {
+      setComparisLoading(false);
+    }
+  };
+
+  // Fetch on first load
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      try {
-        setComparisLoading(true);
-        setComparisError(null);
-        const resp = await fetch('/api/comparis/interest-rates');
-        let json: any = null;
-        try { json = await resp.json(); } catch {}
-        if (!resp.ok) {
-          const msg = (json && (json.error || json.message)) ? (json.error || json.message) : `HTTP ${resp.status}`;
-          throw new Error(msg);
-        }
-        
-        if (!cancelled) {
-          setComparisRates(json?.data ?? null);
-        }
-      } catch (err: any) {
-        // On error, fall back to static rates so the UI still shows values
-        if (!cancelled) {
-          console.warn('Falling back to static Comparis rates:', err);
-          setComparisError(null);
-          setComparisRates(comparisFallbackRates);
-        }
-      } finally {
-        if (!cancelled) setComparisLoading(false);
+    (async () => {
+      await refreshComparisRates();
+      // If fallback was used, try once more after 8s to replace with live data if available
+      if (!cancelled) {
+        setTimeout(() => {
+          if (comparisIsFallback) {
+            refreshComparisRates();
+          }
+        }, 8000);
       }
-    };
-    load();
+    })();
     return () => { cancelled = true; };
   }, []);
+
+  // Also refetch when user lands on Step 3 and we only have fallback
+  useEffect(() => {
+    if (currentStep === 3 && comparisIsFallback) {
+      refreshComparisRates();
+    }
+  }, [currentStep]);
 
   // Nutzung-Flag
   const isOwnerOccupied = state.usage === "eigennutzung";
