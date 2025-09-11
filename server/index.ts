@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { handleDemo } from "./routes/demo";
+import { getComparisRates } from "./routes/comparis-rates";
 
 export function createServer() {
   const app = express();
@@ -18,6 +19,10 @@ export function createServer() {
   });
 
   app.get("/api/demo", handleDemo);
+
+  // Comparis interest rates (Richtzinsen Mittelwert) scraping endpoint
+  // Returns: { ok: true, data: { "2": number, ..., "10": number } }
+  app.get("/api/comparis/interest-rates", getComparisRates);
 
   return app;
 }

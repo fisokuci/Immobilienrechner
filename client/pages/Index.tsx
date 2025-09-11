@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon, Info, RotateCcw, Home, Calculator, DollarSign } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { comparisFallbackRates } from "@/lib/comparisFallback";
 import ReactSpeedometer from "react-d3-speedometer";
 import DobCalendarInput from "@/components/DobCalendarInput";
 
@@ -213,6 +214,10 @@ export default function Index() {
   const [currentStep, setCurrentStep] = useState(1);
   const [state, setState] = useState<CalculatorState>(defaultState);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Comparis rates (Richtzinsen Mittelwert (Comparis)) for 2..10 years
+  const [comparisRates, setComparisRates] = useState<Record<string, number> | null>(null);
+  const [comparisLoading, setComparisLoading] = useState(false);
+  const [comparisError, setComparisError] = useState<string | null>(null);
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -231,6 +236,39 @@ export default function Index() {
   useEffect(() => {
     localStorage.setItem('mortgageCalculator', JSON.stringify(state));
   }, [state]);
+
+  // Fetch Comparis rates on first load
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        setComparisLoading(true);
+        setComparisError(null);
+        const resp = await fetch('/api/comparis/interest-rates');
+        let json: any = null;
+        try { json = await resp.json(); } catch {}
+        if (!resp.ok) {
+          const msg = (json && (json.error || json.message)) ? (json.error || json.message) : `HTTP ${resp.status}`;
+          throw new Error(msg);
+        }
+        
+        if (!cancelled) {
+          setComparisRates(json?.data ?? null);
+        }
+      } catch (err: any) {
+        // On error, fall back to static rates so the UI still shows values
+        if (!cancelled) {
+          console.warn('Falling back to static Comparis rates:', err);
+          setComparisError(null);
+          setComparisRates(comparisFallbackRates);
+        }
+      } finally {
+        if (!cancelled) setComparisLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   // Nutzung-Flag
   const isOwnerOccupied = state.usage === "eigennutzung";
@@ -1336,6 +1374,27 @@ function BelehnungsGauge({ value }: { value: number }) {
               )}
 
 
+              {/* Richtzinsen Mittelwert (Comparis) (Comparis) */}
+              <div className="mt-2">
+                <h3 className="text-base font-semibold">Richtzinsen Mittelwert</h3>
+                {comparisLoading && (
+                  <p className="text-sm text-slate-500">Lade Zinsen · Bitte warten…</p>
+                )}
+                {comparisError && (
+                  <p className="text-sm text-red-600">Konnte Zinsen nicht laden: {comparisError}</p>
+                )}
+                {!comparisLoading && !comparisError && comparisRates && (
+                  <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {["2","3","4","5","6","7","8","9","10"].map((y) => (
+                      <div key={y} className="rounded border border-slate-200 bg-white px-3 py-2 text-sm flex items-center justify-between">
+                        <span className="text-slate-600">{y} Jahre</span>
+                        <span className="font-medium text-slate-900">{comparisRates[y] != null ? `${comparisRates[y].toFixed(2)}%` : "-"}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Nach dem Einkommen-Grid in case 3 einfügen */}
               {/*
               <div className="space-y-2">
@@ -1386,6 +1445,8 @@ function BelehnungsGauge({ value }: { value: number }) {
                   </div>
                 );
               })()}
+
+              {/* Zinsen unterhalb des Ergebnistexts anzeigen - removed to restore previous placement */}
 
             </div>
           );
@@ -1493,3 +1554,5 @@ function BelehnungsGauge({ value }: { value: number }) {
     </div>
   );
 }
+
+
