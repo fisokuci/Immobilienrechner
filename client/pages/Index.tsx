@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,6 @@ import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon, Info, RotateCcw, Home, Calculator, DollarSign } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { comparisFallbackRates } from "@/lib/comparisFallback";
 import ReactSpeedometer from "react-d3-speedometer";
 import DobCalendarInput from "@/components/DobCalendarInput";
 
@@ -218,7 +217,9 @@ export default function Index() {
   const [comparisRates, setComparisRates] = useState<Record<string, number> | null>(null);
   const [comparisLoading, setComparisLoading] = useState(false);
   const [comparisError, setComparisError] = useState<string | null>(null);
-  const [comparisIsFallback, setComparisIsFallback] = useState(false);
+  const [selectedRate, setSelectedRate] = useState<{ years: number; rate: number } | null>(null);
+  const [selectedInterestYearly, setSelectedInterestYearly] = useState<number>(0);
+  const [selectedInterestMonthly, setSelectedInterestMonthly] = useState<number>(0);
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -242,7 +243,6 @@ export default function Index() {
   const refreshComparisRates = async () => {
     setComparisLoading(true);
     setComparisError(null);
-    setComparisIsFallback(false);
     try {
       const resp = await fetch('/api/comparis/interest-rates');
       let json: any = null;
@@ -252,13 +252,11 @@ export default function Index() {
         throw new Error(msg);
       }
       setComparisRates(json?.data ?? null);
-      setComparisIsFallback(false);
     } catch (err: any) {
-      // fallback so UI never looks empty
-      console.warn('Falling back to static Comparis rates:', err);
-      setComparisError(String(err?.message || err));
-      setComparisRates(comparisFallbackRates);
-      setComparisIsFallback(true);
+      // show a friendly error and keep previous data (if any)
+      console.warn('Failed to load Comparis rates:', err);
+      setComparisError('Kontaktieren Sie den Administrator');
+      // do not overwrite existing rates with fallback
     } finally {
       setComparisLoading(false);
     }
@@ -269,24 +267,10 @@ export default function Index() {
     let cancelled = false;
     (async () => {
       await refreshComparisRates();
-      // If fallback was used, try once more after 8s to replace with live data if available
-      if (!cancelled) {
-        setTimeout(() => {
-          if (comparisIsFallback) {
-            refreshComparisRates();
-          }
-        }, 8000);
-      }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Also refetch when user lands on Step 3 and we only have fallback
-  useEffect(() => {
-    if (currentStep === 3 && comparisIsFallback) {
-      refreshComparisRates();
-    }
-  }, [currentStep]);
 
   // Nutzung-Flag
   const isOwnerOccupied = state.usage === "eigennutzung";
@@ -1399,16 +1383,47 @@ function BelehnungsGauge({ value }: { value: number }) {
                   <p className="text-sm text-slate-500">Lade Zinsen · Bitte warten…</p>
                 )}
                 {comparisError && (
-                  <p className="text-sm text-red-600">Konnte Zinsen nicht laden: {comparisError}</p>
+                  <p className="text-sm text-red-600">{comparisError}</p>
                 )}
                 {!comparisLoading && !comparisError && comparisRates && (
                   <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                    {["2","3","4","5","6","7","8","9","10"].map((y) => (
-                      <div key={y} className="rounded border border-slate-200 bg-white px-3 py-2 text-sm flex items-center justify-between">
-                        <span className="text-slate-600">{y} Jahre</span>
-                        <span className="font-medium text-slate-900">{comparisRates[y] != null ? `${comparisRates[y].toFixed(2)}%` : "-"}</span>
-                      </div>
-                    ))}
+                    {["2","3","4","5","6","7","8","9","10"].map((y) => {
+                      const rate = comparisRates[y];
+                      const isSelected = selectedRate?.years === Number(y);
+                      const base = "rounded border px-3 py-2 text-sm flex items-center justify-between cursor-pointer select-none";
+                      const cls = isSelected ? "bg-emerald-50 border-emerald-400 ring-2 ring-emerald-300" : "bg-white border-slate-200 hover:border-slate-300";
+                      return (
+                        <button
+                          key={y}
+                          type="button"
+                          onClick={() => {
+                            const yearsNum = Number(y);
+                            const effectiveRate = typeof rate === 'number' ? rate : 0;
+                            setSelectedRate({ years: yearsNum, rate: effectiveRate });
+                            // Calculate based on Neue Finanzierung (investment - pension - pillar - cashEquity)
+                            const investment = parseNumber(state.investmentCost || "0");
+                            const pension = parseNumber(state.pensionWithdrawal || "0");
+                            const pillar = parseNumber(state.pillarWithdrawal || "0");
+                            const cash = parseNumber(state.cashEquity || "0");
+                            const nf = investment - pension - pillar - cash;
+                            if (nf > 0 && effectiveRate > 0) {
+                              const yearly = nf * (effectiveRate / 100);
+                              setSelectedInterestYearly(yearly);
+                              setSelectedInterestMonthly(yearly / 12);
+                            } else {
+                              setSelectedInterestYearly(0);
+                              setSelectedInterestMonthly(0);
+                            }
+                          }}
+                          aria-pressed={isSelected}
+                          className={`${base} ${cls}`}
+                          title={`${y} Jahre - ${rate != null ? rate.toFixed(2) + '%': '-'}`}
+                        >
+                          <span className="text-slate-600">{y} Jahre</span>
+                          <span className="font-medium text-slate-900">{rate != null ? `${rate.toFixed(2)}%` : "-"}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1572,5 +1587,6 @@ function BelehnungsGauge({ value }: { value: number }) {
     </div>
   );
 }
+
 
 
