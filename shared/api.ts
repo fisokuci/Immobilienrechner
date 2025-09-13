@@ -10,3 +10,9 @@
 export interface DemoResponse {
   message: string;
 }
+
+// Generic interest rates response shape used by scraping endpoints
+export interface InterestRatesResponse {
+  ok: boolean;
+  data: Record<string, number>; // keys: "2".."10", values: percentage numbers
+}

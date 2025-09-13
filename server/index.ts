@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import { handleDemo } from "./routes/demo";
 import { getComparisRates } from "./routes/comparis-rates";
+import { getMoneyParkRates } from "./routes/moneypark-rates";
 
 export function createServer() {
   const app = express();
@@ -23,6 +24,10 @@ export function createServer() {
   // Comparis interest rates (Richtzinsen Mittelwert) scraping endpoint
   // Returns: { ok: true, data: { "2": number, ..., "10": number } }
   app.get("/api/comparis/interest-rates", getComparisRates);
+
+  // MoneyPark interest rates scraping endpoint
+  // Returns: { ok: true, data: { "2": number, ..., "10": number } }
+  app.get("/api/moneypark/interest-rates", getMoneyParkRates);
 
   return app;
 }

@@ -213,10 +213,10 @@ export default function Index() {
   const [currentStep, setCurrentStep] = useState(1);
   const [state, setState] = useState<CalculatorState>(defaultState);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  // Comparis rates (Richtzinsen Mittelwert (Comparis)) for 2..10 years
-  const [comparisRates, setComparisRates] = useState<Record<string, number> | null>(null);
-  const [comparisLoading, setComparisLoading] = useState(false);
-  const [comparisError, setComparisError] = useState<string | null>(null);
+  // MoneyPark rates (Richtzinsen Mittelwert) for 2..10 years
+  const [moneyparkRates, setMoneyparkRates] = useState<Record<string, number> | null>(null);
+  const [moneyparkLoading, setMoneyparkLoading] = useState(false);
+  const [moneyparkError, setMoneyparkError] = useState<string | null>(null);
   const [selectedRate, setSelectedRate] = useState<{ years: number; rate: number } | null>(null);
   const [selectedInterestYearly, setSelectedInterestYearly] = useState<number>(0);
   const [selectedInterestMonthly, setSelectedInterestMonthly] = useState<number>(0);
@@ -239,26 +239,26 @@ export default function Index() {
     localStorage.setItem('mortgageCalculator', JSON.stringify(state));
   }, [state]);
 
-  // Helper to fetch live Comparis rates with graceful fallback
-  const refreshComparisRates = async () => {
-    setComparisLoading(true);
-    setComparisError(null);
+  // Helper to fetch live MoneyPark rates with graceful fallback
+  const refreshMoneyparkRates = async () => {
+    setMoneyparkLoading(true);
+    setMoneyparkError(null);
     try {
-      const resp = await fetch('/api/comparis/interest-rates');
+      const resp = await fetch('/api/moneypark/interest-rates');
       let json: any = null;
       try { json = await resp.json(); } catch {}
       if (!resp.ok) {
         const msg = (json && (json.error || json.message)) ? (json.error || json.message) : `HTTP ${resp.status}`;
         throw new Error(msg);
       }
-      setComparisRates(json?.data ?? null);
+      setMoneyparkRates(json?.data ?? null);
     } catch (err: any) {
       // show a friendly error and keep previous data (if any)
-      console.warn('Failed to load Comparis rates:', err);
-      setComparisError('Kontaktieren Sie den Administrator');
+      console.warn('Failed to load MoneyPark rates:', err);
+      setMoneyparkError('Kontaktieren Sie den Administrator');
       // do not overwrite existing rates with fallback
     } finally {
-      setComparisLoading(false);
+      setMoneyparkLoading(false);
     }
   };
 
@@ -266,7 +266,7 @@ export default function Index() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await refreshComparisRates();
+      await refreshMoneyparkRates();
     })();
     return () => { cancelled = true; };
   }, []);
@@ -1376,19 +1376,19 @@ function BelehnungsGauge({ value }: { value: number }) {
               )}
 
 
-              {/* Richtzinsen Mittelwert (Comparis) (Comparis) */}
+              {/* Richtzinsen Mittelwert (MoneyPark) */}
               <div className="mt-2">
                 <h3 className="text-base font-semibold">Richtzinsen Mittelwert</h3>
-                {comparisLoading && (
+                {moneyparkLoading && (
                   <p className="text-sm text-slate-500">Lade Zinsen · Bitte warten…</p>
                 )}
-                {comparisError && (
-                  <p className="text-sm text-red-600">{comparisError}</p>
+                {moneyparkError && (
+                  <p className="text-sm text-red-600">{moneyparkError}</p>
                 )}
-                {!comparisLoading && !comparisError && comparisRates && (
+                {!moneyparkLoading && !moneyparkError && moneyparkRates && (
                   <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                     {["2","3","4","5","6","7","8","9","10"].map((y) => {
-                      const rate = comparisRates[y];
+                      const rate = moneyparkRates[y];
                       const isSelected = selectedRate?.years === Number(y);
                       const base = "rounded border px-3 py-2 text-sm flex items-center justify-between cursor-pointer select-none";
                       const cls = isSelected ? "bg-emerald-50 border-emerald-400 ring-2 ring-emerald-300" : "bg-white border-slate-200 hover:border-slate-300";
@@ -1424,6 +1424,13 @@ function BelehnungsGauge({ value }: { value: number }) {
                         </button>
                       );
                     })}
+                  </div>
+                )}
+                {selectedRate && (
+                  <div className="mt-2 text-sm text-slate-600">
+                    Ausgewählt: Fest {selectedRate.years} Jahre — {selectedRate.rate.toFixed(2)}% ·
+                    {' '}Zins/Jahr: {formatCurrency(Math.round(selectedInterestYearly))}
+                    {' '}({formatCurrency(Math.round(selectedInterestMonthly))} / Monat)
                   </div>
                 )}
               </div>
