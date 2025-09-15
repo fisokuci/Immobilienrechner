@@ -1360,6 +1360,9 @@ function BelehnungsGauge({ value }: { value: number }) {
                 <Input
                   id="collateral"
                   type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onInput={handleNumericInput}
                   placeholder="z. B. 50'000"
                   defaultValue={displayCHF(state.collateral)}
                   onBlur={(e) => {
