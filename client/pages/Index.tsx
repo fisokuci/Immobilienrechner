@@ -1171,6 +1171,9 @@ function BelehnungsGauge({ value }: { value: number }) {
                   id="purchasePriceCh"
                   placeholder="z.B. 1’000’000"
                   type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onInput={handleNumericInput}
                   defaultValue={displayCHF(state.purchasePriceCh)}
                   onBlur={(e) => {
                     const clean = cleanCHF(e.target.value);
@@ -1213,6 +1216,9 @@ function BelehnungsGauge({ value }: { value: number }) {
                   id="investments"
                   placeholder="z.B. 100’000"
                   type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onInput={handleNumericInput}
                   defaultValue={displayCHF(state.investments)}
                   onBlur={(e) => {
                     const clean = cleanCHF(e.target.value);
@@ -1290,6 +1296,9 @@ function BelehnungsGauge({ value }: { value: number }) {
                   id="cashEquity"
                   placeholder="z.B. CHF 250’000.00"
                   type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onInput={handleNumericInput}
                   defaultValue={displayCHF(state.cashEquity)}
                   onBlur={(e) => { const clean = cleanCHF(e.target.value); e.target.value = displayCHF(clean); setState(p => ({...p, cashEquity: clean})); }}
                   onFocus={(e) => { if (state.cashEquity) e.target.value = state.cashEquity; }}
@@ -1326,6 +1335,9 @@ function BelehnungsGauge({ value }: { value: number }) {
                 <Input
                   id="mortgageNotes"
                   type="text"
+                  inputMode="numeric"
+                  pattern="\d*"
+                  onInput={handleNumericInput}
                   placeholder="z. B. 100'000"
                   defaultValue={displayCHF(state.mortgageNotes)}
                   onBlur={(e) => {
