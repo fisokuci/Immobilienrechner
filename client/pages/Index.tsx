@@ -492,10 +492,27 @@ const secondMortgagePercent = () => thresholdsFor(state.propertyType, state.usag
     },
 
     tragbarkeitPct: () => {
-      const denom = calculations.incomeAfterStep2(); // Einkommen nach kalk. Kosten
-      const own   = parseNumber(state.otherHousingCosts || "0"); // Eigene Wohnkosten jährlich
-      if (denom <= 0) return NaN; // nicht berechenbar
-      return (own / denom) * 100;
+      const usage = (state.usage || "").toLowerCase();
+
+      const grossIncome = calculations.totalGrossIncome();           // Er + Sie (jährlich)
+      const leasing = parseNumber(state.otherLoans || "0");          // Leasing/Konsumkredit (jährlich)
+      const incomeAfterLeasing = grossIncome - leasing;              // Lohn nach Leasing-Abzug
+
+      const calcBel = calculations.kalkBelastung();                  // Amort + Zins + NK - Miete (jährlich)
+      const otherCosts = parseNumber(state.otherHousingCosts || "0"); // "Weitere Belastungen" (eigene Wohnkosten, jährlich)
+
+      if (incomeAfterLeasing <= 0) return NaN;
+
+      if (usage === "eigennutzung") {
+        // (Kalk. Belastung + weitere Belastungen) / (Einkommen nach Leasing)
+        return ((calcBel + otherCosts) / incomeAfterLeasing) * 100;
+      }
+
+      // Vermietet: weitere Belastungen relativ zum Einkommen nach Leasing,
+      // nachdem die kalk. Belastung abgezogen wurde
+      const denom = incomeAfterLeasing - calcBel;
+      if (denom <= 0) return NaN;
+      return (otherCosts / denom) * 100;
     },
   };
 
