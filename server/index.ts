@@ -2,7 +2,6 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { handleDemo } from "./routes/demo";
-import { getComparisRates } from "./routes/comparis-rates";
 import { getMoneyParkRates } from "./routes/moneypark-rates";
 
 export function createServer() {
@@ -20,10 +19,6 @@ export function createServer() {
   });
 
   app.get("/api/demo", handleDemo);
-
-  // Comparis interest rates (Richtzinsen Mittelwert) scraping endpoint
-  // Returns: { ok: true, data: { "2": number, ..., "10": number } }
-  app.get("/api/comparis/interest-rates", getComparisRates);
 
   // MoneyPark interest rates scraping endpoint
   // Returns: { ok: true, data: { "2": number, ..., "10": number } }
