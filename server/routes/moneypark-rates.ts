@@ -38,6 +38,9 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
   let page: import("playwright").Page | null = null;
 
   try {
+    // Initialize mergedFetchData outside the try block so it's accessible later
+    let mergedFetchData: Record<string, number> = {};
+
     // 1) First, try simple HTTP fetch and HTML parsing (no headless browser).
     //    This avoids DNS/proxy issues some environments have with Chromium.
     const preferFetch = String(req.query.fetch ?? "1") === "1"; // default: on
@@ -87,8 +90,6 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
             }
           }
         }
-
-        const mergedFetchData: Record<string, number> = {};
         for (const sourceUrl of MONEY_PARK_SOURCE_URLS) {
           const resp = await fetch(sourceUrl, {
             headers: {
