@@ -4,8 +4,15 @@ import type { RequestHandler } from "express";
 // Uses Playwright to accept cookies and evaluate the DOM for robust extraction.
 // Response format: { ok: true, data: { "2": number, ..., "10": number } }
 
-const MONEY_PARK_URL =
-  "https://www.moneypark.ch/ch/mp/de/home/hypotheken/hypothekarzinsen.html";
+const MONEY_PARK_SOURCE_URLS = [
+  "https://app.moneypark.ch/hypothek/zinsen/hypozinsen/",
+  "https://www.moneypark.ch/ch/mp/de/home/hypotheken/hypothekarzinsen.html",
+] as const;
+
+const MONEY_PARK_URL = MONEY_PARK_SOURCE_URLS[0];
+const MONEY_PARK_JSON_URL =
+  "https://www.moneypark.ch/ch/mp/de/system/pages/reference/_jcr_content/whitelabelparsys-01/interestratesteaser_.data.json";
+const WANTED_YEARS = ["2", "3", "4", "5", "6", "7", "8", "9", "10"] as const;
 
 const COOKIE_ACCEPT_SELECTORS = [
   'button:has-text("Alle akzeptieren")',
@@ -23,18 +30,6 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
   const isDebug = String(req.query.debug ?? "").toLowerCase() === "1";
   const wantHtml = String(req.query.html ?? "") === "1";
   const debug: any = { cookie: [], url: "", console: [], waits: [], tablesScan: null, source: "" };
-  let chromium: typeof import("playwright")["chromium"]; // type hint only
-  try {
-    const pw = await import("playwright");
-    chromium = pw.chromium;
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      error:
-        "Playwright not installed. Please `pnpm add -D playwright` and run `pnpm dlx playwright install chromium`.",
-      details: String(err),
-    });
-  }
 
   let browser: import("playwright").Browser | null = null;
   let context: import("playwright").BrowserContext | null = null;
@@ -47,31 +42,87 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
     if (preferFetch) {
       try {
         debug.source = "fetch";
-        const resp = await fetch(MONEY_PARK_URL, {
+        const jsonResp = await fetch(MONEY_PARK_JSON_URL, {
           headers: {
             "user-agent":
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            accept: "application/json,text/plain,*/*",
             "accept-language": "de-CH,de;q=0.9,en;q=0.8",
           },
         } as any);
-        if (resp.ok) {
-          const html = await resp.text();
-          if (isDebug) (debug as any).fetchLength = html.length;
-          if (isDebug && wantHtml) (debug as any).html = html;
-          // First try to extract directly from the main page (unlikely — table is in iframe)
-          let parsed = extractRatesFromHtml(html, { debug: isDebug });
-          if (Object.keys(parsed.data).length) {
-            const payload = { ok: true, data: parsed.data, debug: isDebug ? { ...debug, htmlScan: parsed.debug } : undefined } as any;
+        if (jsonResp.ok) {
+          const jsonPayload = await jsonResp.json();
+          const jsonData = extractRatesFromJson(jsonPayload);
+          if (isDebug) {
+            debug.jsonUrl = MONEY_PARK_JSON_URL;
+            debug.jsonKeys = jsonPayload && typeof jsonPayload === "object" ? Object.keys(jsonPayload) : [];
+            debug.jsonData = jsonData;
+          }
+          if (hasEnoughRates(jsonData)) {
+            const payload = {
+              ok: true,
+              data: jsonData,
+              debug: isDebug ? { ...debug, source: "json" } : undefined,
+            } as any;
             if (!isDebug) delete payload.debug;
             return res.json(payload);
-          } else {
-            if (isDebug) debug.htmlScan = parsed.debug;
+          }
+        } else if (isDebug) {
+          debug.jsonStatus = {
+            ok: jsonResp.ok,
+            status: jsonResp.status,
+            statusText: jsonResp.statusText,
+          };
+        }
+
+        const mergedFetchData: Record<string, number> = {};
+        for (const sourceUrl of MONEY_PARK_SOURCE_URLS) {
+          const resp = await fetch(sourceUrl, {
+            headers: {
+              "user-agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+              "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "accept-language": "de-CH,de;q=0.9,en;q=0.8",
+            },
+          } as any);
+          if (!resp.ok) {
+            if (isDebug) {
+              ((debug as any).fetchStatuses ||= []).push({
+                url: sourceUrl,
+                ok: resp.ok,
+                status: resp.status,
+                statusText: resp.statusText,
+              });
+            }
+            continue;
           }
 
-          // If not found, fetch the embedded iframe that actually contains the rates table
-          const iframeUrls = findIframeRateUrls(html, MONEY_PARK_URL);
-          if (isDebug) debug.iframeUrls = iframeUrls;
+          const html = await resp.text();
+          if (isDebug) {
+            ((debug as any).fetchSources ||= []).push({ url: sourceUrl, length: html.length });
+            if (wantHtml && !(debug as any).html) (debug as any).html = html;
+          }
+
+          let parsed = extractRatesFromHtml(html, { debug: isDebug });
+          Object.assign(mergedFetchData, parsed.data);
+          if (hasEnoughRates(parsed.data)) {
+            const payload = {
+              ok: true,
+              data: parsed.data,
+              debug: isDebug ? { ...debug, url: sourceUrl, htmlScan: parsed.debug } : undefined,
+            } as any;
+            if (!isDebug) delete payload.debug;
+            return res.json(payload);
+          }
+
+          if (isDebug) {
+            ((debug as any).htmlScans ||= []).push({ url: sourceUrl, scan: parsed.debug });
+          }
+
+          const iframeUrls = findIframeRateUrls(html, sourceUrl);
+          if (isDebug && iframeUrls.length) {
+            ((debug as any).iframeUrls ||= []).push({ url: sourceUrl, iframeUrls });
+          }
           for (const iframeUrl of iframeUrls) {
             try {
               const iResp = await fetch(iframeUrl, {
@@ -83,7 +134,9 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
                 },
               } as any);
               if (!iResp.ok) {
-                if (isDebug) (debug as any).iframeFetchStatus = { url: iframeUrl, status: iResp.status };
+                if (isDebug) {
+                  ((debug as any).iframeFetchStatuses ||= []).push({ url: iframeUrl, status: iResp.status });
+                }
                 continue;
               }
               const iframeHtml = await iResp.text();
@@ -93,19 +146,34 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
                 if (wantHtml) (debug as any).iframeHtml = iframeHtml;
               }
               parsed = extractRatesFromHtml(iframeHtml, { debug: isDebug });
-              if (Object.keys(parsed.data).length) {
-                const payload = { ok: true, data: parsed.data, debug: isDebug ? { ...debug, iframeScan: parsed.debug } : undefined } as any;
+              Object.assign(mergedFetchData, parsed.data);
+              if (hasEnoughRates(parsed.data)) {
+                const payload = {
+                  ok: true,
+                  data: parsed.data,
+                  debug: isDebug ? { ...debug, url: iframeUrl, iframeScan: parsed.debug } : undefined,
+                } as any;
                 if (!isDebug) delete payload.debug;
                 return res.json(payload);
-              } else if (isDebug) {
-                (debug as any).iframeScan = parsed.debug;
+              }
+              if (isDebug) {
+                ((debug as any).iframeScans ||= []).push({ url: iframeUrl, scan: parsed.debug });
               }
             } catch (e: any) {
-              if (isDebug) (debug as any).iframeFetchError = String(e);
+              if (isDebug) {
+                ((debug as any).iframeFetchErrors ||= []).push({ url: iframeUrl, error: String(e) });
+              }
             }
           }
-        } else {
-          if (isDebug) debug.fetchStatus = { ok: resp.ok, status: resp.status, statusText: resp.statusText };
+        }
+        if (hasEnoughRates(mergedFetchData)) {
+          const payload = {
+            ok: true,
+            data: mergedFetchData,
+            debug: isDebug ? { ...debug, source: "fetch-merged" } : undefined,
+          } as any;
+          if (!isDebug) delete payload.debug;
+          return res.json(payload);
         }
       } catch (e: any) {
         if (isDebug) debug.fetchError = String(e);
@@ -114,7 +182,10 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
 
     // 2) Fallback to Playwright if fetch either failed or produced empty data.
     debug.source = "playwright";
+    let chromium: typeof import("playwright")["chromium"];
     try {
+      const pw = await import("playwright");
+      chromium = pw.chromium;
       browser = await chromium.launch({ headless: true });
     } catch (launchErr: any) {
       return res.status(500).json({
@@ -355,7 +426,7 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
             // Search within parent block to capture typical card layouts
             const scope = el.closest("section,article,div,li,dl,table,tbody,tr") || el.parentElement || el;
             if (!scope) continue;
-            const scopeText = norm(scope.innerText || "");
+            const scopeText = norm((scope as HTMLElement).innerText || "");
             // Try to find first percentage-like number after the label occurrence
             const labelIdx = scopeText.toLowerCase().indexOf((y + " jahr").toLowerCase());
             if (labelIdx >= 0) {
@@ -391,7 +462,7 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
     });
 
     debug.tablesScan = scan;
-    if (frameData && Object.keys(frameData).length) {
+    if (frameData && hasEnoughRates(frameData)) {
       // Prefer iframe data if available
       if (isDebug) {
         res.json({ ok: true, data: frameData, debug });
@@ -416,9 +487,24 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
           debug.htmlError = String(e);
         }
       }
-      res.json({ ok: true, data, debug });
+      if (hasEnoughRates(data)) {
+        res.json({ ok: true, data, debug });
+      } else {
+        res.status(502).json({
+          ok: false,
+          error: "MoneyPark-Zinsen konnten nicht gelesen werden.",
+          debug,
+        });
+      }
     } else {
-      res.json({ ok: true, data });
+      if (hasEnoughRates(data)) {
+        res.json({ ok: true, data });
+      } else {
+        res.status(502).json({
+          ok: false,
+          error: "MoneyPark-Zinsen konnten nicht gelesen werden.",
+        });
+      }
     }
   } catch (err) {
     if (isDebug) {
@@ -437,7 +523,7 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
 // Finds the "Art der Hypothek | Zinssatz" table and extracts Fest 2..10 Jahre.
 function extractRatesFromHtml(html: string, opts?: { debug?: boolean }) {
   const debug: any = opts?.debug ? { candidates: [] as any[], nextDataTried: false, nextDataFound: false } : undefined;
-  const wanted = new Set(["2","3","4","5","6","7","8","9","10"]);
+  const wanted = new Set<string>(WANTED_YEARS);
   const normSpace = (s: string) => s.replace(/\s+/g, " ").trim();
   const stripTags = (s: string) => normSpace(
     s
@@ -519,6 +605,30 @@ function extractRatesFromHtml(html: string, opts?: { debug?: boolean }) {
   } catch (e: any) {
     if (debug) debug.nextDataError = String(e);
   }
+
+  // Strategy B: Direct text parsing for static page content such as
+  // "Fest 5 Jahre ab 1.80 %" or "Fixed 5 years from 0.42 %".
+  const textContent = stripTags(html);
+  const lineRegexes = [
+    /\bFest\s*(\d{1,2})\s*Jahr(?:e)?\s*ab\s*([0-9]+(?:[.,][0-9]+)?)\s*%/gi,
+    /\bFixed\s*(\d{1,2})\s*years?\s*from\s*([0-9]+(?:[.,][0-9]+)?)\s*%/gi,
+  ];
+  for (const re of lineRegexes) {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(textContent))) {
+      const year = match[1];
+      if (!wanted.has(year) || result[year] !== undefined) continue;
+      const value = parsePct(match[2]);
+      if (!Number.isNaN(value)) {
+        result[year] = value;
+        if (debug) debug.candidates.push({ from: "text", year, value, sample: match[0] });
+      }
+    }
+  }
+  if ([...wanted].every((y) => result[y] !== undefined)) {
+    return { data: result, debug } as const;
+  }
+
   const tableRegex = /<table\b[\s\S]*?<\/table>/gi;
   const allTables = html.match(tableRegex) || [];
   for (const t of allTables) {
@@ -591,4 +701,26 @@ function resolveUrl(baseUrl: string, href: string): string {
   } catch {
     return href;
   }
+}
+
+function extractRatesFromJson(payload: unknown): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!payload || typeof payload !== "object") return result;
+
+  for (const year of WANTED_YEARS) {
+    const key = `rate_fixed_${year}y`;
+    const entry = (payload as Record<string, unknown>)[key];
+    if (!entry || typeof entry !== "object") continue;
+    const value = (entry as Record<string, unknown>).best_expected_value;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      result[year] = value;
+    }
+  }
+
+  return result;
+}
+
+function hasEnoughRates(data: Record<string, number> | null | undefined): data is Record<string, number> {
+  if (!data) return false;
+  return WANTED_YEARS.some((year) => Number.isFinite(data[year]));
 }

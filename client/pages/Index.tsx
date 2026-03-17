@@ -220,6 +220,8 @@ export default function Index() {
   const [selectedRate, setSelectedRate] = useState<{ years: number; rate: number } | null>(null);
   const [selectedInterestYearly, setSelectedInterestYearly] = useState<number>(0);
   const [selectedInterestMonthly, setSelectedInterestMonthly] = useState<number>(0);
+  const hasMoneyparkRates = (rates: Record<string, number> | null | undefined) =>
+    !!rates && Object.values(rates).some((value) => Number.isFinite(value));
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -251,7 +253,10 @@ export default function Index() {
         const msg = (json && (json.error || json.message)) ? (json.error || json.message) : `HTTP ${resp.status}`;
         throw new Error(msg);
       }
-      setMoneyparkRates(json?.data ?? null);
+      if (!hasMoneyparkRates(json?.data)) {
+        throw new Error('Keine Zinsdaten erhalten');
+      }
+      setMoneyparkRates(json.data);
     } catch (err: any) {
       // show a friendly error and keep previous data (if any)
       console.warn('Failed to load MoneyPark rates:', err);
@@ -1415,9 +1420,20 @@ function BelehnungsGauge({ value }: { value: number }) {
                   <p className="text-sm text-slate-500">Lade Zinsen · Bitte warten…</p>
                 )}
                 {moneyparkError && (
-                  <p className="text-sm text-red-600">{moneyparkError}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-3">
+                    <p className="text-sm text-red-600">{moneyparkError}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void refreshMoneyparkRates();
+                      }}
+                      className="text-sm font-medium text-slate-700 underline underline-offset-4 hover:text-slate-900"
+                    >
+                      Erneut laden
+                    </button>
+                  </div>
                 )}
-                {!moneyparkLoading && !moneyparkError && moneyparkRates && (
+                {!moneyparkLoading && !moneyparkError && hasMoneyparkRates(moneyparkRates) && (
                   <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                     {["2","3","4","5","6","7","8","9","10"].map((y) => {
                       const rate = moneyparkRates[y];
@@ -1626,6 +1642,4 @@ function BelehnungsGauge({ value }: { value: number }) {
     </div>
   );
 }
-
-
 
