@@ -181,6 +181,15 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
     }
 
     // 2) Fallback to Playwright if fetch either failed or produced empty data.
+    // Skip Playwright if disabled via query param
+    const skipPlaywright = String(req.query.skipPlaywright ?? "0") === "1";
+    if (skipPlaywright) {
+      return res.status(502).json({
+        ok: false,
+        error: "MoneyPark-Zinsen konnten nicht über HTTP-Fetch geladen werden und Playwright ist deaktiviert.",
+      });
+    }
+
     debug.source = "playwright";
     let chromium: typeof import("playwright")["chromium"];
     try {
