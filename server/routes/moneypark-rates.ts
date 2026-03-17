@@ -5,13 +5,15 @@ import type { RequestHandler } from "express";
 // Response format: { ok: true, data: { "2": number, ..., "10": number } }
 
 const MONEY_PARK_SOURCE_URLS = [
-  "https://app.moneypark.ch/hypothek/zinsen/hypozinsen/",
   "https://www.moneypark.ch/ch/mp/de/home/hypotheken/hypothekarzinsen.html",
+  "https://app.moneypark.ch/hypothek/zinsen/hypozinsen/",
 ] as const;
 
 const MONEY_PARK_URL = MONEY_PARK_SOURCE_URLS[0];
-const MONEY_PARK_JSON_URL =
-  "https://www.moneypark.ch/ch/mp/de/system/pages/reference/_jcr_content/whitelabelparsys-01/interestratesteaser_.data.json";
+const MONEY_PARK_JSON_URLS = [
+  "https://www.moneypark.ch/ch/mp/de/system/pages/reference/_jcr_content/whitelabelparsys-01/interestratesteaser_.data.json",
+  "https://www.moneypark.ch/ch/mp/de/system/pages/reference/_jcr_content/parsys/interestratesteaser_.data.json",
+] as const;
 const WANTED_YEARS = ["2", "3", "4", "5", "6", "7", "8", "9", "10"] as const;
 
 const COOKIE_ACCEPT_SELECTORS = [
@@ -42,37 +44,48 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
     if (preferFetch) {
       try {
         debug.source = "fetch";
-        const jsonResp = await fetch(MONEY_PARK_JSON_URL, {
-          headers: {
-            "user-agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-            accept: "application/json,text/plain,*/*",
-            "accept-language": "de-CH,de;q=0.9,en;q=0.8",
-          },
-        } as any);
-        if (jsonResp.ok) {
-          const jsonPayload = await jsonResp.json();
-          const jsonData = extractRatesFromJson(jsonPayload);
-          if (isDebug) {
-            debug.jsonUrl = MONEY_PARK_JSON_URL;
-            debug.jsonKeys = jsonPayload && typeof jsonPayload === "object" ? Object.keys(jsonPayload) : [];
-            debug.jsonData = jsonData;
+
+        // Try multiple JSON endpoints
+        for (const jsonUrl of MONEY_PARK_JSON_URLS) {
+          try {
+            const jsonResp = await fetch(jsonUrl, {
+              headers: {
+                "user-agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+                accept: "application/json,text/plain,*/*",
+                "accept-language": "de-CH,de;q=0.9,en;q=0.8",
+              },
+            } as any);
+            if (jsonResp.ok) {
+              const jsonPayload = await jsonResp.json();
+              const jsonData = extractRatesFromJson(jsonPayload);
+              if (isDebug) {
+                debug.jsonUrl = jsonUrl;
+                debug.jsonKeys = jsonPayload && typeof jsonPayload === "object" ? Object.keys(jsonPayload) : [];
+                debug.jsonData = jsonData;
+              }
+              if (hasEnoughRates(jsonData)) {
+                const payload = {
+                  ok: true,
+                  data: jsonData,
+                  debug: isDebug ? { ...debug, source: "json" } : undefined,
+                } as any;
+                if (!isDebug) delete payload.debug;
+                return res.json(payload);
+              }
+            } else if (isDebug) {
+              ((debug as any).jsonStatuses ||= []).push({
+                url: jsonUrl,
+                ok: jsonResp.ok,
+                status: jsonResp.status,
+                statusText: jsonResp.statusText,
+              });
+            }
+          } catch (e: any) {
+            if (isDebug) {
+              ((debug as any).jsonErrors ||= []).push({ url: jsonUrl, error: String(e) });
+            }
           }
-          if (hasEnoughRates(jsonData)) {
-            const payload = {
-              ok: true,
-              data: jsonData,
-              debug: isDebug ? { ...debug, source: "json" } : undefined,
-            } as any;
-            if (!isDebug) delete payload.debug;
-            return res.json(payload);
-          }
-        } else if (isDebug) {
-          debug.jsonStatus = {
-            ok: jsonResp.ok,
-            status: jsonResp.status,
-            statusText: jsonResp.statusText,
-          };
         }
 
         const mergedFetchData: Record<string, number> = {};
@@ -181,12 +194,26 @@ export const getMoneyParkRates: RequestHandler = async (req, res) => {
     }
 
     // 2) Fallback to Playwright if fetch either failed or produced empty data.
-    // Skip Playwright if disabled via query param
-    const skipPlaywright = String(req.query.skipPlaywright ?? "0") === "1";
+    // In production, skip Playwright and return partial data if available
+    const isProduction = process.env.NODE_ENV === "production";
+    const skipPlaywright = String(req.query.skipPlaywright ?? (isProduction ? "1" : "0")) === "1";
+
+    // Return what we have if there's any data
+    if (Object.keys(mergedFetchData).length > 0) {
+      const payload = {
+        ok: true,
+        data: mergedFetchData,
+        debug: isDebug ? { ...debug, source: "fetch-partial", note: "Returned partial data from HTTP fetch" } : undefined,
+      } as any;
+      if (!isDebug) delete payload.debug;
+      return res.json(payload);
+    }
+
     if (skipPlaywright) {
       return res.status(502).json({
         ok: false,
-        error: "MoneyPark-Zinsen konnten nicht über HTTP-Fetch geladen werden und Playwright ist deaktiviert.",
+        error: "MoneyPark-Zinsen konnten nicht geladen werden. Bitte versuchen Sie es später erneut.",
+        debug: isDebug ? debug : undefined,
       });
     }
 
